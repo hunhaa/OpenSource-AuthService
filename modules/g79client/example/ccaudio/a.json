@@ -1,0 +1,15 @@
+{
+	"info": "{\"stream_name\": \"10030_domain_server_4686065499487295841\", \"account\": \"3053902342\", \"fast_reconnection\": 0, \"uid\": \"3053902342\", \"game_uid\": 2035630128, \"stat_url\": {\"http\": \"http://audiostatlog.cc.163.com/query\", \"https\": \"https://audiostatlog.cc.163.com/query\"}, \"httpkey\": \"c007f7391457b550149816abf8ac2955f04cc49e\", \"query_url\": {\"http\": \"http://audioms.cc.163.com/v1/audiouserquery/batch_query_userinfo\", \"https\": \"https://audioms.cc.163.com/v1/audiouserquery/batch_query_userinfo\"}, \"channel_type\": \"domain_server\", \"game\": 10030, \"check_url\": {\"http\": \"http://audioms.cc.163.com/v1/audiosdklog/check\", \"https\": \"https://audioms.cc.163.com/v1/audiosdklog/check\"}, \"sdk_configs\": {\"static_res_url\": {\"http\": \"http://audioms.cc.163.com/v1/sdkctrl/get_static_res\", \"https\": \"https://audioms.cc.163.com/v1/sdkctrl/get_static_res\"}, \"config_url\": {\"http\": \"http://audioms.cc.163.com/v1/sdkctrl/get_configs\", \"https\": \"https://audioms.cc.163.com/v1/sdkctrl/get_configs\"}}}",
+	"stream_name": "10030_domain_server_4686065499487295841",
+	"ts": "20260516161731",
+	"sign": "687b670d9d14816a28ec3adbce16d584",
+	"eid": 994613968,
+	"streamid": "98758498401458",
+	"nodes": [
+		"115.236.156.117:8008",
+		"115.236.156.117:8093",
+		"115.236.156.117:8075",
+		"115.236.113.236:8003",
+		"45.253.182.188:8079"
+	]
+}
