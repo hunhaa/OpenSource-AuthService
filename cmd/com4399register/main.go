@@ -44,7 +44,7 @@ type statistics struct {
 
 type controller struct {
 	ctx              context.Context
-	ipStore          *ipHistoryStore
+	ipStore          *IPHistoryStore
 	workers          map[string]struct{}
 	mu               sync.Mutex
 	wg               sync.WaitGroup
@@ -61,13 +61,14 @@ type controller struct {
 }
 
 func main() {
+	EnsureLog()
 	if err := db.InitDBWithOptions(db.InitOptions{}); err != nil {
 		log.Fatalf("init database: %v", err)
 	}
-	var ipStore *ipHistoryStore
+	var ipStore *IPHistoryStore
 	if httpproxy.Com4399RegisterDeduplicateProxy {
 		var err error
-		ipStore, err = newIPHistoryStore(context.Background())
+		ipStore, err = NewIPHistoryStore(context.Background())
 		if err != nil {
 			log.Fatalf("init temporary ip database: %v", err)
 		}
@@ -75,10 +76,16 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	newController(ctx, ipStore).run()
+	if err := NewController(ctx, ipStore).Run(); err != nil {
+		log.Fatalf("com4399 register worker exit: %v", err)
+	}
 }
 
-func newController(ctx context.Context, ipStore *ipHistoryStore) *controller {
+func EnsureLog() {
+	log.SetOutput(os.Stdout)
+}
+
+func NewController(ctx context.Context, ipStore *IPHistoryStore) *controller {
 	return &controller{
 		ctx:            ctx,
 		ipStore:        ipStore,
@@ -87,6 +94,12 @@ func newController(ctx context.Context, ipStore *ipHistoryStore) *controller {
 		failureReasons: make(map[string]uint64),
 		failureDetails: make(map[string]map[string]uint64),
 	}
+}
+
+// Run 提供给 funauth 作为子命令直接调用。老的 main() 仍保留以单独构建 com4399register-linux-amd64。
+func (c *controller) Run() error {
+	c.run()
+	return nil
 }
 
 func (c *controller) run() {

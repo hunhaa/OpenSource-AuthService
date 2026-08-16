@@ -11,6 +11,15 @@ import (
 	"github.com/Yeah114/g79client"
 )
 
+// Main 作为 funauth test bruteforce 子命令入口（同时保留原二进制独立运行）。
+func Main(args []string) {
+	runBruteForce(args)
+}
+
+func main() {
+	Main(os.Args[1:])
+}
+
 const sauth1 = `{"gameid": "x19", "login_channel": "netease", "app_channel": "netease", "platform": "pc", "sdkuid": "aibgvakgg6ozaucj", "sessionid": "1-eyJzaSI6ICIwOGFjMzdlYjJjMGZiODRhYTAxYjFhMDgzODExYjc1YTliYTU4N2U2IiwgIm9kaSI6ICJhbWF3dWZ5YWF4dHUzdWZxLWQiLCAicyI6ICI4ZXdlYzR4NTU2Zjc0Y2syd2FubnE5ZmZoaXIzaDRoMSIsICJ1IjogImFpYmd2YWtnZzZvemF1Y2oiLCAidCI6IDIsICJwcnMiOiAxMjgsICJnX2kiOiAiYWVjZnJ4b2R5cWFhYWFqcCIsICJzYSI6IC05OX0g", "sdk_version": "5.9.0", "udid": "amawufyaaxtu3ufq-d", "deviceid": "amawufyaaxtu3ufq-d", "aim_info": "{\"aim\": \"127.0.0.1\", \"country\": \"CN\", \"tz\": \"+0800\", \"tzid\": \"\"}", "client_login_sn": "1b098d080b7d28b80f27445fa86a5998", "gas_token": "", "source_platform": "netease", "ip": "127.0.0.1", "nickname": "Nan_4504o"}`
 
 func cookieStr() string {
@@ -19,11 +28,11 @@ func cookieStr() string {
 	return string(b)
 }
 
-func main() {
+func runBruteForce(args []string) {
+	_ = args
 	log.SetOutput(os.Stdout)
 	cs := cookieStr()
 	found := false
-	// sp: 0..13 (14 possibilities; index range in V4 is same 0..13, but sp range maybe larger)
 	for sp := 0; sp <= 15; sp++ {
 		for tr := 1; tr <= 20; tr++ {
 			client, err := g79client.NewClient()
@@ -45,7 +54,6 @@ func main() {
 			} else {
 				fmt.Printf("sp=%2d tr=%2d → OTHER: %s\n", sp, tr, firstLine(msg))
 			}
-			// avoid throttling
 			time.Sleep(120 * time.Millisecond)
 		}
 	}
@@ -58,9 +66,6 @@ func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > 120 {
-		s = s[:120]
-	}
 	return s
 }
 
@@ -68,5 +73,5 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return s[:n] + "…"
 }

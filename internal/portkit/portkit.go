@@ -1,9 +1,9 @@
-//go:build legacy && !windows
-
-package main
+package portkit
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -12,48 +12,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/Yeah114/FunAuth/cmd/funauth/internal/router"
-	"github.com/Yeah114/FunAuth/internal/db"
 )
 
-func main() {
-	// 确保标准日志输出到 stdout（部分面板默认不抓取 stderr）
-	log.SetOutput(os.Stdout)
-
-	// 首次启动引导：交互式输入 MySQL 信息 → 写入 config.json
-	if _, err := db.EnsureConfigInteractive(); err != nil {
-		log.Fatalf("初始化配置失败: %v", err)
-	}
-
-	// 初始化数据库
-	if err := db.InitDBWithOptions(db.InitOptions{}); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
-	}
-	initProxyPoolThenCom4399()
-
-	r := router.NewRouter()
-
-	addr := os.Getenv("FUNAUTH_ADDR")
-	if addr == "" {
-		addr = ":8090"
-	}
-
-	// Linux 下启动前尝试释放端口
-	if runtime.GOOS == "linux" {
-		if p, ok := parsePort(addr); ok {
-			log.Printf("[port] try free port %d before binding", p)
-			freePortLinux(p)
-		}
-	}
-
-	log.Printf("[server] binding address: %s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func parsePort(addr string) (int, bool) {
+// ParsePort 把 addr 形式的 ":8080" / "127.0.0.1:8080" / "8080" 解析成端口号
+func ParsePort(addr string) (int, bool) {
 	a := strings.TrimSpace(addr)
 	if a == "" {
 		return 0, false
@@ -73,7 +35,22 @@ func parsePort(addr string) (int, bool) {
 	return v, true
 }
 
-func freePortLinux(port int) {
+// PrettyAddr 日志里展示用，"0.0.0.0:8080" 直接返回，":8080" 保持不变
+func PrettyAddr(a string) string {
+	if strings.HasPrefix(a, ":") {
+		return a
+	}
+	return a
+}
+
+// FreePortLinux 如果在 Linux 上运行，尝试释放占用 port 的进程。非 Linux 直接 no-op。
+func FreePortLinux(port int) {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if port <= 0 || port > 65535 {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -82,7 +59,7 @@ func freePortLinux(port int) {
 		pids = findPidsWithLsof(ctx, port)
 	}
 	if len(pids) == 0 {
-		log.Printf("[port] no owner found for %d", port)
+		log.Printf("[port] no owner found for port %d", port)
 		return
 	}
 	uniq := make(map[int]struct{})
@@ -93,7 +70,7 @@ func freePortLinux(port int) {
 		if pid <= 1 || pid == os.Getpid() {
 			continue
 		}
-		log.Printf("[port] sending SIGTERM to pid=%d for port %d", pid, port)
+		log.Printf("[port] SIGTERM pid=%d (port %d)", pid, port)
 		_ = syscall.Kill(pid, syscall.SIGTERM)
 	}
 	time.Sleep(1200 * time.Millisecond)
@@ -101,14 +78,22 @@ func freePortLinux(port int) {
 		if pid <= 1 || pid == os.Getpid() {
 			continue
 		}
-		if alive(pid) {
-			log.Printf("[port] sending SIGKILL to pid=%d for port %d", pid, port)
+		if Alive(pid) {
+			log.Printf("[port] SIGKILL pid=%d (port %d)", pid, port)
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
 }
 
-func alive(pid int) bool {
+// FreePortLinuxFromAddr 接收 addr 字符串形式的便捷封装
+func FreePortLinuxFromAddr(addr string) {
+	if p, ok := ParsePort(addr); ok {
+		log.Printf("[port] try free port %d before binding", p)
+		FreePortLinux(p)
+	}
+}
+
+func Alive(pid int) bool {
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return false
@@ -117,8 +102,11 @@ func alive(pid int) bool {
 }
 
 func findPidsWithSS(ctx context.Context, port int) []int {
-	cmd := exec.CommandContext(ctx, "ss", "-lntp")
-	out, err := cmd.CombinedOutput()
+	ss, err := exec.LookPath("ss")
+	if err != nil {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, ss, "-lntp").CombinedOutput()
 	if err != nil || len(out) == 0 {
 		return nil
 	}
@@ -154,12 +142,16 @@ func findPidsWithSS(ctx context.Context, port int) []int {
 }
 
 func findPidsWithLsof(ctx context.Context, port int) []int {
+	lsof, err := exec.LookPath("lsof")
+	if err != nil {
+		return nil
+	}
 	argsSets := [][]string{
 		{"-t", "-iTCP:" + strconv.Itoa(port), "-sTCP:LISTEN"},
 		{"-t", "-i:" + strconv.Itoa(port)},
 	}
 	for _, args := range argsSets {
-		cmd := exec.CommandContext(ctx, "lsof", args...)
+		cmd := exec.CommandContext(ctx, lsof, args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil || len(out) == 0 {
 			continue
@@ -176,4 +168,11 @@ func findPidsWithLsof(ctx context.Context, port int) []int {
 		}
 	}
 	return nil
+}
+
+// ErrUsage 是子命令自定义的 usage 错误（一般 -h / 缺少参数时触发）
+var ErrUsage = errors.New("usage")
+
+func Usagef(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrUsage, fmt.Sprintf(format, args...))
 }

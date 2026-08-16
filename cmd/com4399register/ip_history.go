@@ -20,12 +20,12 @@ const (
 	ipHistoryMaxChecks = 16
 )
 
-type ipHistoryStore struct {
+type IPHistoryStore struct {
 	db *sql.DB
 	mu sync.Mutex
 }
 
-func newIPHistoryStore(ctx context.Context) (*ipHistoryStore, error) {
+func NewIPHistoryStore(ctx context.Context) (*IPHistoryStore, error) {
 	db, err := sql.Open("mysql", ipHistoryDSN)
 	if err != nil {
 		return nil, err
@@ -36,7 +36,7 @@ func newIPHistoryStore(ctx context.Context) (*ipHistoryStore, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	store := &ipHistoryStore{db: db}
+	store := &IPHistoryStore{db: db}
 	if err := store.ensureSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -44,14 +44,14 @@ func newIPHistoryStore(ctx context.Context) (*ipHistoryStore, error) {
 	return store, nil
 }
 
-func (s *ipHistoryStore) Close() error {
+func (s *IPHistoryStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
 	return s.db.Close()
 }
 
-func (s *ipHistoryStore) ensureSchema(ctx context.Context) error {
+func (s *IPHistoryStore) ensureSchema(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS ips (
 	id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS ips (
 	return err
 }
 
-func (s *ipHistoryStore) filterNewProxies(ctx context.Context, proxies []httpproxy.PaidProxyInfo) []httpproxy.PaidProxyInfo {
+func (s *IPHistoryStore) filterNewProxies(ctx context.Context, proxies []httpproxy.PaidProxyInfo) []httpproxy.PaidProxyInfo {
 	if s == nil || len(proxies) == 0 {
 		return proxies
 	}
@@ -121,7 +121,7 @@ func uniqueProxyCandidates(proxies []httpproxy.PaidProxyInfo) ([]httpproxy.PaidP
 	return candidates, ips
 }
 
-func (s *ipHistoryStore) existingIPs(ctx context.Context, date string, ips []string) (map[string]struct{}, error) {
+func (s *IPHistoryStore) existingIPs(ctx context.Context, date string, ips []string) (map[string]struct{}, error) {
 	args := make([]any, 0, len(ips)+1)
 	args = append(args, date)
 	for _, ip := range ips {
@@ -145,7 +145,7 @@ func (s *ipHistoryStore) existingIPs(ctx context.Context, date string, ips []str
 	return existing, rows.Err()
 }
 
-func (s *ipHistoryStore) insertNewProxies(ctx context.Context, date string, proxies []httpproxy.PaidProxyInfo) error {
+func (s *IPHistoryStore) insertNewProxies(ctx context.Context, date string, proxies []httpproxy.PaidProxyInfo) error {
 	args := make([]any, 0, len(proxies)*3)
 	values := make([]string, 0, len(proxies))
 	for _, proxy := range proxies {
@@ -156,7 +156,7 @@ func (s *ipHistoryStore) insertNewProxies(ctx context.Context, date string, prox
 	return err
 }
 
-func (s *ipHistoryStore) filterNewProxiesSlow(ctx context.Context, proxies []httpproxy.PaidProxyInfo) []httpproxy.PaidProxyInfo {
+func (s *IPHistoryStore) filterNewProxiesSlow(ctx context.Context, proxies []httpproxy.PaidProxyInfo) []httpproxy.PaidProxyInfo {
 	if s == nil || len(proxies) == 0 {
 		return proxies
 	}
@@ -197,7 +197,7 @@ func (s *ipHistoryStore) filterNewProxiesSlow(ctx context.Context, proxies []htt
 	return filtered
 }
 
-func (s *ipHistoryStore) markProxy(ctx context.Context, proxy httpproxy.PaidProxyInfo) (bool, error) {
+func (s *IPHistoryStore) markProxy(ctx context.Context, proxy httpproxy.PaidProxyInfo) (bool, error) {
 	ip := proxyIP(proxy.Address)
 	if ip == "" {
 		return false, fmt.Errorf("empty proxy ip")
@@ -217,7 +217,7 @@ func (s *ipHistoryStore) markProxy(ctx context.Context, proxy httpproxy.PaidProx
 	return true, nil
 }
 
-func (s *ipHistoryStore) appendText(proxy httpproxy.PaidProxyInfo, ip string) error {
+func (s *IPHistoryStore) appendText(proxy httpproxy.PaidProxyInfo, ip string) error {
 	return nil
 }
 
