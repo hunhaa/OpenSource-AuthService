@@ -29,14 +29,29 @@ type LoginResponse struct {
 
 // {'HostNum': 200, 'ServerHostNum': 8000, 'TempServerStop': 0, 'CdnUrl': 'https://g79.gdl.netease.com/', 'H5VersionUrl': 'https://g79.update.netease.com/cdnversion/obt_h5version.json', 'SeadraUrl': 'https://pub-api.seadra.netease.com', 'HomeServerUrl': 'https://g79mclobthome.minecraft.cn', 'HomeServerGrayUrl': 'https://g79mclobthomegray.nie.netease.com:9443', 'WebServerUrl': 'https://g79mclobt.minecraft.cn', 'WebServerGrayUrl': 'https://g79mclobtgray.nie.netease.com:9443', 'CoreServerUrl': 'https://g79obtapigtcoregray.minecraft.cn', 'CoreServerGrayUrl': 'https://g79obtapigtcoregray.minecraft.cn', 'TransferServerUrl': 'https://g79.update.netease.com/transferserver_obt_new.list', 'TransferServerHttpUrl': 'https://g79transfernew.nie.netease.com', 'TransferServerNewHttpUrl': 'https://g79mcltransfer.minecraft.cn', 'MomentUrl': 'https://x19-pyq.webcgi.163.com/', 'ForumUrl': 'https://mcpel-web.16163.com', 'AuthServerUrl': 'https://g79authobt.minecraft.cn', 'ChatServerUrl': 'https://x19.update.netease.com/chatserver.list', 'PathNUrl': 'https://impression.update.netease.com/lighten/atlas_x19_hangzhou-{isp}.txt', 'PePathNUrl': 'https://impression.update.netease.com/lighten/atlas_g79_hangzhou-{isp}.txt', 'PathNIpv6Url': 'https://impression.update.netease.com/lighten/x19/cnv6.txt', 'PePathNIpv6Url': 'https://impression.update.netease.com/lighten/g79/cnv6.txt', 'LinkServerUrl': 'https://g79.update.netease.com/linkserver_obt.list', 'ApiGatewayUrl': 'https://g79apigatewayobt.minecraft.cn', 'ApiGatewayWeiXinUrl': 'https://g79apigatewayobtweixin.minecraft.cn', 'ApiGatewayGrayUrl': 'https://g79apigatewaygrayobt.nie.netease.com', 'communityHost': 'https://news-api.16163.com/app/g79/api', 'WelfareUrl': 'https://mc.163.com/pe/client/', 'DCWebUrl': 'https://x19apigatewayobt.nie.netease.com', 'RentalTransferUrl': 'https://mcrealms.update.netease.com/isp_map_production.json', 'MgbSdkUrl': 'https://mgbsdk.matrix.netease.com'}
 type G79ReleaseJSON struct {
-	CoreServerURL            string `json:"CoreServerUrl"`
-	AuthServerURL            string `json:"AuthServerUrl"`
-	WebServerUrl             string `json:"WebServerUrl"`
-	ApiGatewayUrl            string `json:"ApiGatewayUrl"`
-	TransferServerUrl        string `json:"TransferServerUrl"`
-	TransferServerNewHttpUrl string `json:"TransferServerNewHttpUrl"`
-	ChatServerURL            string `json:"ChatServerUrl"`
-	LinkServerURL            string `json:"LinkServerUrl"`
+	CoreServerURL              string `json:"CoreServerUrl"`
+	CoreServerGrayURL          string `json:"CoreServerGrayUrl"`
+	AuthServerURL              string `json:"AuthServerUrl"`
+	AuthServerNewHttpURL       string `json:"AuthServerNewHttpUrl"`
+	WebServerUrl               string `json:"WebServerUrl"`
+	WebServerGrayURL           string `json:"WebServerGrayUrl"`
+	WebServerNewHttpURL        string `json:"WebServerNewHttpUrl"`
+	ApiGatewayUrl              string `json:"ApiGatewayUrl"`
+	ApiGatewayGrayUrl          string `json:"ApiGatewayGrayUrl"`
+	TransferServerUrl          string `json:"TransferServerUrl"`
+	TransferServerHttpUrl      string `json:"TransferServerHttpUrl"`
+	TransferServerNewHttpUrl   string `json:"TransferServerNewHttpUrl"`
+	ChatServerURL              string `json:"ChatServerUrl"`
+	LinkServerURL              string `json:"LinkServerUrl"`
+	RentalTransferURL          string `json:"RentalTransferUrl"`
+	DCWebURL                   string `json:"DCWebUrl"`
+	HomeServerURL              string `json:"HomeServerUrl"`
+	HomeServerGrayURL          string `json:"HomeServerGrayUrl"`
+	MgbSdkUrl                  string `json:"MgbSdkUrl"`
+	ApiGatewayWeiXinUrl        string `json:"ApiGatewayWeiXinUrl"`
+	CommunityHost              string `json:"communityHost"`
+	WelfareUrl                 string `json:"WelfareUrl"`
+	SeadraURL                  string `json:"SeadraUrl"`
 }
 
 type X19ReleaseJSON struct {
@@ -906,57 +921,86 @@ func (c *Client) GenerateNetworkGameAuthV2(roomID, clientKey string) ([]byte, er
 
 // 发送认证v2请求
 func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
-	api := "/authentication-v2"
+	// 不同服端部署的 authentication-v2 路径有多种写法，用候选列表逐个试。
+	// 注意：user-token 是基于 (path+body+token) 算的动态签名，path 变了 token 必须重算。
+	pathCandidates := []string{
+		"/authentication-v2",
+		"/authenticationv2",
+		"/AuthenticationV2",
+	}
 
 	encryptedData, err := G79HttpEncrypt(authv2Data)
 	if err != nil {
 		return nil, err
 	}
 	hexBody := hex.EncodeToString(encryptedData)
-	userTokenSign := CalculateDynamicToken(api, string(authv2Data), c.UserToken)
 
 	// 整理候选 base URL：不同部署下认证v2可能挂在 AuthServer / WebServer / ApiGateway 上。
-	// 按优先级尝试，每尝试一次都保留状态码，用于错误信息。
 	type attempt struct {
+		label       string
 		base        string
+		path        string
 		contentType string
 	}
 	candidates := []attempt{}
-	addCandidate := func(base, ct string) {
+	addCandidate := func(label, base, path, ct string) {
 		base = strings.TrimRight(base, "/")
-		if base == "" {
+		if base == "" || path == "" {
 			return
 		}
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
 		for _, c := range candidates {
-			if c.base == base && c.contentType == ct {
+			if c.base == base && c.path == path && c.contentType == ct {
 				return
 			}
 		}
-		candidates = append(candidates, attempt{base: base, contentType: ct})
+		candidates = append(candidates, attempt{label: label, base: base, path: path, contentType: ct})
 	}
-	// X19 模式优先 CoreServer / AuthServerCppUrl；普通模式优先 WebServer（与 EnterRentalServerWorld 一致）。
-	if c.IsX19 {
-		addCandidate(c.X19ReleaseJSON.CoreServerURL, "text/plain; charset=utf-8")
-		addCandidate(c.X19ReleaseJSON.AuthServerURL, "text/plain; charset=utf-8")
-		addCandidate(c.X19ReleaseJSON.AuthServerCppURL, "text/plain; charset=utf-8")
-		addCandidate(c.X19ReleaseJSON.WebServerURL, "text/plain; charset=utf-8")
-		addCandidate(c.X19ReleaseJSON.ApiGatewayGrayURL, "text/plain; charset=utf-8")
-	} else {
-		addCandidate(c.ReleaseJSON.WebServerUrl, "text/plain; charset=utf-8")
-		addCandidate(c.ReleaseJSON.AuthServerURL, "text/plain; charset=utf-8")
-		addCandidate(c.ReleaseJSON.AuthServerURL, "application/json")
-		addCandidate(c.ReleaseJSON.WebServerUrl, "application/json")
+	// NetEase 当前真实 G79 Release JSON（adr_release.0.17.json）：
+	//   ApiGatewayUrl      = https://g79apigatewayobt.minecraft.cn
+	//   AuthServerUrl      = https://g79authobt.minecraft.cn
+	//   WebServerUrl       = https://g79mclobt.minecraft.cn
+	//   TransferServerNewHttpUrl = https://g79mcltransfer.minecraft.cn
+	// 租赁服链信息很可能挂在 ApiGateway 或 Transfer 下，而不是 g79mclobt（那是租赁服业务入口的 web）。
+	// 所以普通 G79 优先：ApiGateway → AuthServer → WebServer → Transfer。
+	// 路径上，两种常见 Content-Type 都试，hex body 理论上该用 text/plain。
+	for _, p := range pathCandidates {
+		if c.IsX19 {
+			addCandidate("X19 ApiGatewayGray", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "text/plain; charset=utf-8")
+			addCandidate("X19 CoreServer", c.X19ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8")
+			addCandidate("X19 AuthServer", c.X19ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8")
+			addCandidate("X19 AuthServerCpp", c.X19ReleaseJSON.AuthServerCppURL, p, "text/plain; charset=utf-8")
+			addCandidate("X19 WebServer", c.X19ReleaseJSON.WebServerURL, p, "text/plain; charset=utf-8")
+			addCandidate("X19 ApiGatewayGray(application/json)", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "application/json")
+			addCandidate("X19 CoreServer(application/json)", c.X19ReleaseJSON.CoreServerURL, p, "application/json")
+		} else {
+			addCandidate("G79 ApiGateway", c.ReleaseJSON.ApiGatewayUrl, p, "text/plain; charset=utf-8")
+			addCandidate("G79 ApiGatewayGray", c.ReleaseJSON.ApiGatewayGrayUrl, p, "text/plain; charset=utf-8")
+			addCandidate("G79 AuthServer", c.ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8")
+			addCandidate("G79 TransferServerNewHttp", c.ReleaseJSON.TransferServerNewHttpUrl, p, "text/plain; charset=utf-8")
+			addCandidate("G79 WebServer", c.ReleaseJSON.WebServerUrl, p, "text/plain; charset=utf-8")
+			addCandidate("G79 AuthServerNewHttp", c.ReleaseJSON.AuthServerNewHttpURL, p, "text/plain; charset=utf-8")
+			addCandidate("G79 WebServerNewHttp", c.ReleaseJSON.WebServerNewHttpURL, p, "text/plain; charset=utf-8")
+			addCandidate("G79 ApiGateway(application/json)", c.ReleaseJSON.ApiGatewayUrl, p, "application/json")
+			addCandidate("G79 AuthServer(application/json)", c.ReleaseJSON.AuthServerURL, p, "application/json")
+			addCandidate("G79 WebServer(application/json)", c.ReleaseJSON.WebServerUrl, p, "application/json")
+			addCandidate("G79 TransferServerNewHttp(application/json)", c.ReleaseJSON.TransferServerNewHttpUrl, p, "application/json")
+		}
 	}
 
 	var lastErr error
 	for i, cand := range candidates {
-		fullURL := cand.base + api
+		fullURL := cand.base + cand.path
+		// user-token 必须按当前 path 重算
+		userTokenSign := CalculateDynamicToken(cand.path, string(authv2Data), c.UserToken)
 		req, rerr := http.NewRequest("POST", fullURL, strings.NewReader(hexBody))
 		if rerr != nil {
-			lastErr = fmt.Errorf("[尝试%d/%d] build request: %w", i+1, len(candidates), rerr)
+			lastErr = fmt.Errorf("[尝试%d/%d %s] build request: %w", i+1, len(candidates), cand.label, rerr)
 			continue
 		}
-		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+		req.Header.Set("User-Agent", "WPFLauncher/0.0.0.0")
 		req.Header.Set("Accept-Encoding", "gzip")
 		req.Header.Set("Content-Type", cand.contentType)
 		req.Header.Set("user-id", c.UserID)
@@ -964,27 +1008,29 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 
 		resp, derr := c.httpClient.Do(req)
 		if derr != nil {
-			lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): do=%w", i+1, len(candidates), fullURL, cand.contentType, derr)
+			lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): do=%w",
+				i+1, len(candidates), cand.label, fullURL, cand.contentType, derr)
 			continue
 		}
 		respBody, rerr := readResponseBody(resp)
 		_ = resp.Body.Close()
 		if rerr != nil {
-			lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): read body=%w", i+1, len(candidates), fullURL, cand.contentType, rerr)
+			lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): read body=%w",
+				i+1, len(candidates), cand.label, fullURL, cand.contentType, rerr)
 			continue
 		}
 		// 成功：200 且 body 非空
 		if resp.StatusCode == 200 && len(respBody) > 0 {
 			encryptedResp, herr := hex.DecodeString(string(respBody))
 			if herr != nil {
-				lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): status=200 但 body 非 hex=%q: %w",
-					i+1, len(candidates), fullURL, cand.contentType, trimForErr(respBody), herr)
+				lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): status=200 但 body 非 hex=%q: %w",
+					i+1, len(candidates), cand.label, fullURL, cand.contentType, trimForErr(respBody), herr)
 				continue
 			}
 			decryptedResp, derr2 := G79HttpDecrypt(encryptedResp)
 			if derr2 != nil {
-				lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): status=200 解密失败: %w",
-					i+1, len(candidates), fullURL, cand.contentType, derr2)
+				lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): status=200 解密失败: %w",
+					i+1, len(candidates), cand.label, fullURL, cand.contentType, derr2)
 				continue
 			}
 			return GetValidJSON(decryptedResp), nil
@@ -993,20 +1039,29 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 		bodyStr := trimForErr(respBody)
 		switch resp.StatusCode {
 		case 401:
-			lastErr = fmt.Errorf("[尝试%d/%d] AuthV2未授权: status=%d url=%s ct=%s body=%q。 "+
+			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2未授权: status=%d url=%s ct=%s body=%q。 "+
 				"请先完成Link连接 + SendGameStart 再调用 AuthV2，或重新登录 G79 刷新 UserToken",
-				i+1, len(candidates), resp.StatusCode, fullURL, cand.contentType, bodyStr)
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+		case 403:
+			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2被拒绝: status=%d url=%s ct=%s body=%q。 "+
+				"可能是租赁服未开 / 服务器号无效 / UserToken 无权限（重新登录获取新Token再试）",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+		case 404:
+			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2路径不存在: status=404 url=%s ct=%s body=%q。 "+
+				"说明该 BaseURL + Path 组合在服务器端不存在（会继续自动回退其他组合）。 "+
+				"如果所有候选都 404，请把最后这条完整错误贴给开发者追加更多 BaseURL 候选。",
+				i+1, len(candidates), cand.label, fullURL, cand.contentType, bodyStr)
 		case 400:
-			lastErr = fmt.Errorf("[尝试%d/%d] AuthV2请求格式错误: status=%d url=%s ct=%s body=%q。 "+
-				"可能原因：(1)netese_sid 格式应为 serverID:RentalGame；(2)Link 未建立+GameStart；(3)请求加密/ContentType 不匹配（本工具已自动多候选回退）",
-				i+1, len(candidates), resp.StatusCode, fullURL, cand.contentType, bodyStr)
+			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2请求格式错误: status=%d url=%s ct=%s body=%q。 "+
+				"可能原因：(1)netese_sid 格式应为 serverID:RentalGame；(2)Link 未建立+GameStart；(3)ContentType 不匹配",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
 		default:
-			lastErr = fmt.Errorf("[尝试%d/%d] AuthV2响应异常: status=%d url=%s ct=%s body=%q",
-				i+1, len(candidates), resp.StatusCode, fullURL, cand.contentType, bodyStr)
+			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2响应异常: status=%d url=%s ct=%s body=%q",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
 		}
 	}
 	if lastErr == nil {
-		return nil, fmt.Errorf("AuthV2: 未构造出任何候选请求（ReleaseJSON.AuthServerURL/WebServerURL 均为空，请先 NewClient 初始化）")
+		return nil, fmt.Errorf("AuthV2: 未构造出任何候选请求（ReleaseJSON 字段均为空，请先 NewClient 初始化）")
 	}
 	return nil, lastErr
 }
