@@ -912,44 +912,110 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	hexBody := hex.EncodeToString(encryptedData)
+	userTokenSign := CalculateDynamicToken(api, string(authv2Data), c.UserToken)
 
-	req, err := http.NewRequest("POST", c.ReleaseJSON.AuthServerURL+api, strings.NewReader(hex.EncodeToString(encryptedData)))
-	if err != nil {
-		return nil, err
+	// 整理候选 base URL：不同部署下认证v2可能挂在 AuthServer / WebServer / ApiGateway 上。
+	// 按优先级尝试，每尝试一次都保留状态码，用于错误信息。
+	type attempt struct {
+		base        string
+		contentType string
+	}
+	candidates := []attempt{}
+	addCandidate := func(base, ct string) {
+		base = strings.TrimRight(base, "/")
+		if base == "" {
+			return
+		}
+		for _, c := range candidates {
+			if c.base == base && c.contentType == ct {
+				return
+			}
+		}
+		candidates = append(candidates, attempt{base: base, contentType: ct})
+	}
+	// X19 模式优先 CoreServer / AuthServerCppUrl；普通模式优先 WebServer（与 EnterRentalServerWorld 一致）。
+	if c.IsX19 {
+		addCandidate(c.X19ReleaseJSON.CoreServerURL, "text/plain; charset=utf-8")
+		addCandidate(c.X19ReleaseJSON.AuthServerURL, "text/plain; charset=utf-8")
+		addCandidate(c.X19ReleaseJSON.AuthServerCppURL, "text/plain; charset=utf-8")
+		addCandidate(c.X19ReleaseJSON.WebServerURL, "text/plain; charset=utf-8")
+		addCandidate(c.X19ReleaseJSON.ApiGatewayGrayURL, "text/plain; charset=utf-8")
+	} else {
+		addCandidate(c.ReleaseJSON.WebServerUrl, "text/plain; charset=utf-8")
+		addCandidate(c.ReleaseJSON.AuthServerURL, "text/plain; charset=utf-8")
+		addCandidate(c.ReleaseJSON.AuthServerURL, "application/json")
+		addCandidate(c.ReleaseJSON.WebServerUrl, "application/json")
 	}
 
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
-	req.Header.Set("Accept-Encoding", "gzip")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("user-id", c.UserID)
+	var lastErr error
+	for i, cand := range candidates {
+		fullURL := cand.base + api
+		req, rerr := http.NewRequest("POST", fullURL, strings.NewReader(hexBody))
+		if rerr != nil {
+			lastErr = fmt.Errorf("[尝试%d/%d] build request: %w", i+1, len(candidates), rerr)
+			continue
+		}
+		req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
+		req.Header.Set("Accept-Encoding", "gzip")
+		req.Header.Set("Content-Type", cand.contentType)
+		req.Header.Set("user-id", c.UserID)
+		req.Header.Set("user-token", userTokenSign)
 
-	token := CalculateDynamicToken(api, string(authv2Data), c.UserToken)
-	req.Header.Set("user-token", token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+		resp, derr := c.httpClient.Do(req)
+		if derr != nil {
+			lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): do=%w", i+1, len(candidates), fullURL, cand.contentType, derr)
+			continue
+		}
+		respBody, rerr := readResponseBody(resp)
+		_ = resp.Body.Close()
+		if rerr != nil {
+			lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): read body=%w", i+1, len(candidates), fullURL, cand.contentType, rerr)
+			continue
+		}
+		// 成功：200 且 body 非空
+		if resp.StatusCode == 200 && len(respBody) > 0 {
+			encryptedResp, herr := hex.DecodeString(string(respBody))
+			if herr != nil {
+				lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): status=200 但 body 非 hex=%q: %w",
+					i+1, len(candidates), fullURL, cand.contentType, trimForErr(respBody), herr)
+				continue
+			}
+			decryptedResp, derr2 := G79HttpDecrypt(encryptedResp)
+			if derr2 != nil {
+				lastErr = fmt.Errorf("[尝试%d/%d] POST %s (ct=%s): status=200 解密失败: %w",
+					i+1, len(candidates), fullURL, cand.contentType, derr2)
+				continue
+			}
+			return GetValidJSON(decryptedResp), nil
+		}
+		// 非 200：根据状态码给出不同提示
+		bodyStr := trimForErr(respBody)
+		switch resp.StatusCode {
+		case 401:
+			lastErr = fmt.Errorf("[尝试%d/%d] AuthV2未授权: status=%d url=%s ct=%s body=%q。 "+
+				"请先完成Link连接 + SendGameStart 再调用 AuthV2，或重新登录 G79 刷新 UserToken",
+				i+1, len(candidates), resp.StatusCode, fullURL, cand.contentType, bodyStr)
+		case 400:
+			lastErr = fmt.Errorf("[尝试%d/%d] AuthV2请求格式错误: status=%d url=%s ct=%s body=%q。 "+
+				"可能原因：(1)netese_sid 格式应为 serverID:RentalGame；(2)Link 未建立+GameStart；(3)请求加密/ContentType 不匹配（本工具已自动多候选回退）",
+				i+1, len(candidates), resp.StatusCode, fullURL, cand.contentType, bodyStr)
+		default:
+			lastErr = fmt.Errorf("[尝试%d/%d] AuthV2响应异常: status=%d url=%s ct=%s body=%q",
+				i+1, len(candidates), resp.StatusCode, fullURL, cand.contentType, bodyStr)
+		}
 	}
-	defer resp.Body.Close()
-
-	respBody, err := readResponseBody(resp)
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		return nil, fmt.Errorf("AuthV2: 未构造出任何候选请求（ReleaseJSON.AuthServerURL/WebServerURL 均为空，请先 NewClient 初始化）")
 	}
-	if resp.StatusCode != 200 || len(respBody) == 0 {
-		return nil, fmt.Errorf("AuthV2响应异常 status=%d body=%q，请先完成Link连接+SendGameStart再调用AuthV2",
-			resp.StatusCode, string(respBody))
-	}
+	return nil, lastErr
+}
 
-	encryptedResp, err := hex.DecodeString(string(respBody))
-	if err != nil {
-		return nil, err
+// trimForErr 把日志里的 body 限制到合理长度，避免整包 hex 刷满错误信息。
+func trimForErr(b []byte) string {
+	const max = 512
+	if len(b) <= max {
+		return string(b)
 	}
-
-	decryptedResp, err := G79HttpDecrypt(encryptedResp)
-	if err != nil {
-		return nil, err
-	}
-
-	return GetValidJSON(decryptedResp), nil
+	return string(b[:max]) + fmt.Sprintf("...(len=%d)", len(b))
 }

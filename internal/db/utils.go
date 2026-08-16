@@ -489,26 +489,53 @@ func startCleanupTask() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	cleanup()
+	cleanup(true)
 
 	for range ticker.C {
-		cleanup()
+		cleanup(false)
 	}
 }
 
-func cleanup() {
+var (
+	missingSlotsWarned sync.Once
+	missingUsersWarned sync.Once
+)
+
+// isMissingTableErr 从 MySQL 错误里判断是不是 "表不存在"，用来决定要不要降级成只 warn 一次。
+func isMissingTableErr(err error, tableName string) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, fmt.Sprintf("table '%s'", strings.ToLower(tableName))) &&
+		(strings.Contains(msg, "doesn't exist") || strings.Contains(msg, "does not exist") || strings.Contains(msg, "1146"))
+}
+
+func cleanup(firstRun bool) {
 	// 删除过期的Slot
 	now := time.Now()
 	result := DB.Where("end_time IS NOT NULL AND end_time < ?", now).Delete(&Slot{})
 	if result.Error != nil {
-		log.Printf("清理过期Slot失败: %v", result.Error)
+		if isMissingTableErr(result.Error, "slots") {
+			missingSlotsWarned.Do(func() {
+				log.Printf("[DB][Warn] slots 表不存在，已跳过卡槽清理。如果需要此功能请运行 funauth 交互式建表或手动执行 InitDB。(本提示后续不重复打印)")
+			})
+		} else if firstRun {
+			log.Printf("清理过期Slot失败: %v", result.Error)
+		}
 	}
 
 	// 为没有token的用户生成token
 	var users []*User
 	userResult := DB.Where("token = '' OR token IS NULL").Find(&users)
 	if userResult.Error != nil {
-		log.Printf("查询无token用户失败: %v", userResult.Error)
+		if isMissingTableErr(userResult.Error, "users") {
+			missingUsersWarned.Do(func() {
+				log.Printf("[DB][Warn] users 表不存在，已跳过无token用户补全。如果需要此功能请运行 funauth 交互式建表或手动执行 InitDB。(本提示后续不重复打印)")
+			})
+		} else if firstRun {
+			log.Printf("查询无token用户失败: %v", userResult.Error)
+		}
 	} else {
 		updatedCount := 0
 		for _, user := range users {
@@ -536,6 +563,7 @@ func cleanup() {
 				updatedCount++
 			}
 		}
+		_ = updatedCount
 	}
 
 	// 可以在这里添加清理过期用户的逻辑（如果需要）
