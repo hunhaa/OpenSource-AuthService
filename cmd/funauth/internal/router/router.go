@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/Yeah114/FunAuth/cmd/funauth/internal/handlers"
+	webui "github.com/Yeah114/FunAuth/modules/webui"
 )
 
 func NewRouter() *gin.Engine {
@@ -23,6 +24,9 @@ func NewRouter() *gin.Engine {
 	api := r.Group("/api")
 	handlers.RegisterNewRoutes(api)
 	handlers.RegisterPhoenixRoutes(api)
+
+	// WebUI 控制台 (Bunker-Web 风格) — 静态页与API前缀分离
+	webui.RegisterRoutes(api, r)
 
 	return r
 }

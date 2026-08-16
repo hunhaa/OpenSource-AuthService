@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bunker Web — G79 控制台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">■</span>
+    <span class="title">BUNKER<small>WEB</small></span>
+  </div>
+  <div class="info">
+    <div id="ver-chip" class="chip">
+      <span class="dot"></span> 初始化中…
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- Step 1: Auth -->
+  <section id="card-auth" class="card">
+    <h2><span class="step">1</span> 账号认证 (SAuth Cookie)</h2>
+    <p class="hint">支持三种格式：<code>{"sauth_json":"{...}"}</code>、直接粘贴 <code>sauth_json</code> 对象、或 <code>sauth_json</code> 原始字符串</p>
+    <textarea id="cookie" placeholder='{"sauth_json": "{\"gameid\": \"x19\", \"login_channel\": \"netease\", ...}"}' rows="7"></textarea>
+    <div class="row">
+      <button id="btn-auth" class="primary">登录 / 刷新</button>
+      <span id="auth-msg" class="msg"></span>
+    </div>
+    <div id="auth-result" class="result hidden"></div>
+  </section>
+
+  <!-- Step 2: Link -->
+  <section id="card-link" class="card disabled">
+    <h2><span class="step">2</span> 建立 Link 连接 (发送 GameStart)</h2>
+    <p class="hint">AuthV2 需要先建立 Link 连接并发送 GameStart 前置包，否则认证服务器会返回 400 空响应。</p>
+    <div class="row">
+      <button id="btn-link-start" class="primary">启动 Link + GameStart</button>
+      <button id="btn-link-stop" class="ghost">停止 Link</button>
+      <span id="link-msg" class="msg"></span>
+    </div>
+  </section>
+
+  <!-- Step 3: Search -->
+  <section id="card-search" class="card disabled">
+    <h2><span class="step">3</span> 租赁服搜索</h2>
+    <div class="row">
+      <input id="search-q" type="text" placeholder="输入服务器编号 / 名称，例如 52258662">
+      <button id="btn-search" class="primary">搜索</button>
+    </div>
+    <div id="search-result"></div>
+  </section>
+
+  <!-- Step 4: Enter + AuthV2 -->
+  <section id="card-enter" class="card disabled">
+    <h2><span class="step">4</span> 进入租赁服 &amp; 生成 AuthV2 (ChainInfo)</h2>
+    <div class="row">
+      <input id="enter-id" type="text" placeholder="上一步搜索出的 EntityID">
+      <input id="enter-pwd" type="text" placeholder="服务器密码 (可选)">
+      <button id="btn-enter" class="primary">进入</button>
+    </div>
+    <div id="enter-result"></div>
+    <div class="row" style="margin-top:18px">
+      <button id="btn-authv2" class="primary">生成 ChainInfo (AuthV2)</button>
+      <span id="authv2-msg" class="msg"></span>
+    </div>
+    <div id="authv2-result"></div>
+  </section>
+</main>
+
+<footer>
+  <div>适配版本：<b id="ev">—</b> · 补丁 <b id="pv">—</b></div>
+  <div class="sub">基于 g79client · 参考 Cynic158/Bunker-Web 与 CoozillaX/bunker-web 设计</div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
