@@ -924,7 +924,7 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 	req.Header.Set("user-id", c.UserID)
 
 	token := CalculateDynamicToken(api, string(authv2Data), c.UserToken)
-	req.Header.Set("user-token", hex.EncodeToString([]byte(token)))
+	req.Header.Set("user-token", token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
