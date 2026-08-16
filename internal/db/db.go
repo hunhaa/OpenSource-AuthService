@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -10,6 +11,22 @@ import (
 )
 
 var DB *gorm.DB
+
+// maskDSNPassword 把 user:pass@tcp(...) 中的 pass 替换为 ***，避免错误日志泄露密码
+func maskDSNPassword(dsn string) string {
+	d := strings.TrimSpace(dsn)
+	at := strings.Index(d, "@")
+	if at < 0 {
+		return d
+	}
+	up := d[:at]
+	colon := strings.Index(up, ":")
+	if colon < 0 {
+		return d
+	}
+	user := up[:colon]
+	return user + ":***@" + d[at+1:]
+}
 
 type User struct {
 	UUID            string     `gorm:"primaryKey;column:uuid;type:varchar(36);not null" json:"uuid"`
@@ -78,13 +95,14 @@ func InitDB() error {
 }
 
 func InitDBWithOptions(options InitOptions) error {
-	dsn := "authservice:密码@tcp(127.0.0.1:3306)/authservice?charset=utf8mb4&parseTime=True&loc=Local"
+	cfg, _ := LoadConfig()
+	dsn := ResolveDSN(cfg)
 
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to connect database: %v", err)
+		return fmt.Errorf("failed to connect database (dsn=%q): %w", maskDSNPassword(dsn), err)
 	}
 
 	DB = db

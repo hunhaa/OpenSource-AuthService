@@ -11,6 +11,10 @@
   <div class="brand">
     <span class="logo">■</span>
     <span class="title">BUNKER<small>WEB</small></span>
+    <nav class="tabs">
+      <button class="tab active" data-tab="tab-auth">登录认证</button>
+      <button class="tab" data-tab="tab-register">账号注册</button>
+    </nav>
   </div>
   <div class="info">
     <div id="ver-chip" class="chip">
@@ -20,10 +24,55 @@
 </header>
 
 <main class="wrap">
+  <!-- Register Panel -->
+  <section id="tab-register" class="tab-panel card">
+    <h2>✨ 快速注册 4399 账号（无需外部二进制）</h2>
+    <p class="hint">直接内置 com4399 WebRegisterClient → 实名 → 登录，最后返回可直接使用的 <code>SAuth Cookie</code>（登录时可一键回填）。如果已经有账号，只需勾选「仅登录」填 user/pass 即可拿到 cookie。</p>
+    <div class="grid-2">
+      <div>
+        <label>用户名</label>
+        <div class="row" style="gap:6px">
+          <input id="reg-user" type="text" placeholder="留空自动生成">
+          <button id="btn-reg-preset" class="ghost">🎲 随机</button>
+        </div>
+      </div>
+      <div>
+        <label>密码</label>
+        <div class="row" style="gap:6px">
+          <input id="reg-pass" type="text" placeholder="留空自动生成">
+          <button id="btn-reg-preset2" class="ghost">🎲 随机</button>
+        </div>
+      </div>
+      <div>
+        <label>姓名（实名）</label>
+        <input id="reg-name" type="text" placeholder="如：张伟">
+      </div>
+      <div>
+        <label>身份证号（实名）</label>
+        <input id="reg-id" type="text" placeholder="18 位身份证号">
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;align-items:center">
+      <label class="switch">
+        <input id="reg-loginonly" type="checkbox">
+        <span>仅登录（已有账号，只用 user/pass 拿 SAuth Cookie）</span>
+      </label>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button id="btn-register" class="primary">🚀 注册 &amp; 获取 SAuth Cookie</button>
+      <span id="reg-msg" class="msg"></span>
+    </div>
+    <div id="reg-result" class="result hidden" style="margin-top:16px"></div>
+    <div id="reg-actions" class="row hidden" style="margin-top:10px">
+      <button id="btn-reg-fill" class="primary">⬅ 一键填入左侧登录认证</button>
+    </div>
+  </section>
+
   <!-- Step 1: Auth -->
+  <section id="tab-auth" class="tab-panel">
   <section id="card-auth" class="card">
     <h2><span class="step">1</span> 账号认证 (SAuth Cookie)</h2>
-    <p class="hint">支持三种格式：<code>{"sauth_json":"{...}"}</code>、直接粘贴 <code>sauth_json</code> 对象、或 <code>sauth_json</code> 原始字符串</p>
+    <p class="hint">支持三种格式：<code>{"sauth_json":"{...}"}</code>、直接粘贴 <code>sauth_json</code> 对象、或 <code>sauth_json</code> 原始字符串。也可在「账号注册」标签页一键生成。</p>
     <textarea id="cookie" placeholder='{"sauth_json": "{\"gameid\": \"x19\", \"login_channel\": \"netease\", ...}"}' rows="7"></textarea>
     <div class="row">
       <button id="btn-auth" class="primary">登录 / 刷新</button>
@@ -68,6 +117,7 @@
     </div>
     <div id="authv2-result"></div>
   </section>
+  </section><!-- /tab-auth -->
 </main>
 
 <footer>

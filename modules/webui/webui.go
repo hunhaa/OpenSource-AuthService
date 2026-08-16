@@ -153,6 +153,9 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		g.POST("/rental/enter", HandleRentalEnter)
 		g.POST("/rental/authv2", HandleRentalAuthV2)
 		g.POST("/logout", HandleLogout)
+
+		// 注册 (Bunker 风格)
+		RegisterRegisterRoutes(g)
 	}
 
 	// 静态控制台 & 根跳转 挂在根路径，不重复加 /api 前缀

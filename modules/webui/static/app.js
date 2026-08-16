@@ -210,15 +210,80 @@ async function doAuthV2(){
   }
 }
 
-// ---------- bootstrap ----------
+// ---------- tabs ----------
+function switchTab(id){
+  document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===id));
+  document.querySelectorAll(".tab-panel").forEach(p=>p.classList.toggle("active", p.id===id));
+  localStorage.setItem("bunker_tab", id);
+}
+document.addEventListener("click", (e)=>{
+  const t = e.target.closest(".tab");
+  if(!t) return;
+  switchTab(t.dataset.tab);
+});
+
+// ---------- register flow ----------
+async function regPreset(){
+  const r = await fetch(API + "/register/preset").then(r=>r.json());
+  if(!r.ok) return;
+  $("#reg-user").value = r.data.username || "";
+  $("#reg-pass").value = r.data.password || "";
+}
+async function doRegister(){
+  const user = $("#reg-user").value.trim();
+  const pass = $("#reg-pass").value.trim();
+  const name = $("#reg-name").value.trim();
+  const idno = $("#reg-id").value.trim();
+  const loginOnly = $("#reg-loginonly").checked;
+  if(loginOnly && !user){ toast("仅登录模式下 username 不能为空","err"); return; }
+  if(!loginOnly && (!name || !idno)){ toast("请填写姓名和身份证号，或勾选「仅登录」","err"); return; }
+  setMsg("reg-msg","执行中（注册+实名+登录，最长 90 秒）…","");
+  $("#btn-register").disabled = true;
+  try{
+    const d = await call("/register/com4399", {
+      username:user, password:pass, real_name:name, id_card:idno, login_only:loginOnly
+    });
+    setMsg("reg-msg","完成，得到 "+(d.cookie_len||0)+" 字节 SAuth","ok");
+    const box = $("#reg-result");
+    box.classList.remove("hidden");
+    box.textContent = JSON.stringify(d, null, 2);
+    if(d.cookie){
+      $("#reg-actions").classList.remove("hidden");
+      $("#reg-actions").dataset.cookie = d.cookie;
+      toast("4399 SAuth 生成成功","ok");
+    }
+  }catch(e){
+    setMsg("reg-msg", String(e.message||e), "err");
+    toast(String(e.message||e),"err");
+  }finally{
+    $("#btn-register").disabled = false;
+  }
+}
+function regFill(){
+  const cookie = $("#reg-actions").dataset.cookie;
+  if(!cookie){ toast("没有可用的 cookie","err"); return; }
+  $("#cookie").value = cookie;
+  switchTab("tab-auth");
+  setMsg("auth-msg","已从注册页回填，点「登录」即可","ok");
+  toast("已回填到登录认证页面","ok");
+}
 document.addEventListener("DOMContentLoaded", ()=>{
+  // register
+  $("#btn-reg-preset").addEventListener("click", regPreset);
+  $("#btn-reg-preset2").addEventListener("click", regPreset);
+  $("#btn-register").addEventListener("click", doRegister);
+  $("#btn-reg-fill").addEventListener("click", regFill);
+
   $("#btn-auth").addEventListener("click", doAuth);
   $("#btn-link-start").addEventListener("click", doLinkStart);
   $("#btn-link-stop").addEventListener("click", doLinkStop);
   $("#btn-search").addEventListener("click", doSearch);
   $("#btn-enter").addEventListener("click", doEnter);
   $("#btn-authv2").addEventListener("click", doAuthV2);
-  // restore token persistence
+
+  // restore tab & token persistence
+  const savedTab = localStorage.getItem("bunker_tab") || "tab-auth";
+  switchTab(savedTab);
   if(currentToken){
     setEnabled("card-link", true);
     setEnabled("card-search", true);

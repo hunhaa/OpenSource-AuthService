@@ -21,6 +21,11 @@ func main() {
 	// 确保标准日志输出到 stdout（部分面板默认不抓取 stderr）
 	log.SetOutput(os.Stdout)
 
+	// 首次启动引导：交互式输入 MySQL 信息 → 写入 config.json
+	if _, err := db.EnsureConfigInteractive(); err != nil {
+		log.Fatalf("初始化配置失败: %v", err)
+	}
+
 	// 初始化数据库
 	if err := db.InitDBWithOptions(db.InitOptions{}); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
