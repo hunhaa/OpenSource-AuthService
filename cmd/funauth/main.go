@@ -21,11 +21,12 @@ func main() {
 	// 确保标准日志输出到 stdout（部分面板默认不抓取 stderr）
 	log.SetOutput(os.Stdout)
 
-	// 初始化数据库
+	// 初始化数据库（失败时仅警告，允许服务继续启动以验证API）
 	if err := db.InitDBWithOptions(db.InitOptions{}); err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		log.Printf("[WARN] Failed to initialize database (continuing anyway): %v", err)
+	} else {
+		initProxyPoolThenCom4399()
 	}
-	initProxyPoolThenCom4399()
 
 	r := router.NewRouter()
 
