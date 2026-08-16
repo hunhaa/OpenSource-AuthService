@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var EngineVersion = "3.8.15.292836"
+var EngineVersion = "3.9.15.297907" // APK内引擎版本，与提取的libminecraftpe.so MD5对应
 
 func Refetch() {
 	packList, _ := RefreshG79PackList()

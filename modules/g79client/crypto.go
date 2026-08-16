@@ -74,96 +74,107 @@ func randomBytes(length int) ([]byte, error) {
 	return b, nil
 }
 
-// HTTP加密
+// HTTP加密 - 严格按照nethard-core TypeScript版本实现
+// 格式: AES-128-CBC( body + "\n" + 16位随机字符 + 零填充至16字节倍数 )
+//       输出: 16字节随机IV + 密文 + 1字节标记 (index<<4 | V4)
 func G79HttpEncrypt(body []byte) ([]byte, error) {
-	// 对齐到16字节块并添加16个随机字节
-	blockSize := 16
-	targetLen := ((len(body) + blockSize + blockSize - 1) / blockSize) * blockSize
-	buffer := make([]byte, targetLen)
-	copy(buffer, body)
-
-	// 添加16个随机字节
-	tailRandom, err := randomString(16)
+	// 16位随机字母数字填充
+	randFill, err := randomString(16)
 	if err != nil {
 		return nil, err
 	}
-	copy(buffer[len(body):], []byte(tailRandom))
+	// TypeScript: `${bodyIn}\n${randFill}`
+	unpadded := append([]byte{}, body...)
+	unpadded = append(unpadded, '\n')
+	unpadded = append(unpadded, []byte(randFill)...)
 
-	// 生成标志位
-	highNibble, err := rand.Int(rand.Reader, big.NewInt(15))
+	// 填充至16字节倍数，补0
+	paddedLen := len(unpadded)
+	if rem := paddedLen % aes.BlockSize; rem != 0 {
+		paddedLen += aes.BlockSize - rem
+	}
+	padded := make([]byte, paddedLen)
+	copy(padded, unpadded)
+
+	// 标记位: 随机index 0..13 << 4 | V4(0x04)
+	index, err := rand.Int(rand.Reader, big.NewInt(14)) // exclusive upper bound 14 => 0..13
 	if err != nil {
 		return nil, err
 	}
-	flag := byte((highNibble.Int64() << 4) | 0x0C)
+	flag := byte((index.Int64() << 4) | 0x04)
 
-	// 生成IV
-	iv, err := randomString(16)
-	if err != nil {
+	// 16字节随机IV
+	iv := make([]byte, 16)
+	if _, err := rand.Read(iv); err != nil {
 		return nil, err
 	}
-	ivBytes := []byte(iv)
 
-	// 选择密钥
 	keyIndex := (flag >> 4) & 0x0F
 	keyBytes, err := hex.DecodeString(keys[keyIndex])
 	if err != nil {
 		return nil, err
 	}
 
-	// AES加密
 	block, err := aes.NewCipher(keyBytes)
 	if err != nil {
 		return nil, err
 	}
+	encrypted := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(encrypted, padded)
 
-	mode := cipher.NewCBCEncrypter(block, ivBytes)
-	cipherText := make([]byte, len(buffer))
-	mode.CryptBlocks(cipherText, buffer)
-
-	// 组装结果
-	result := make([]byte, 16+len(cipherText)+1)
-	copy(result[0:16], ivBytes)
-	copy(result[16:16+len(cipherText)], cipherText)
-	result[len(result)-1] = flag
-
-	return result, nil
+	out := make([]byte, 0, len(iv)+len(encrypted)+1)
+	out = append(out, iv...)
+	out = append(out, encrypted...)
+	out = append(out, flag)
+	return out, nil
 }
 
-// HTTP解密
+// HTTP解密 - 严格按照nethard-core TypeScript版本实现
 func G79HttpDecrypt(payload []byte) ([]byte, error) {
-	if len(payload) < 18 {
+	if len(payload) < aes.BlockSize+2 { // 16 IV + 至少1字节数据 + 1字节flag
 		return nil, fmt.Errorf("payload too short")
 	}
-
 	flag := payload[len(payload)-1]
-	iv := payload[0:16]
-	cipherText := payload[16 : len(payload)-1]
-
+	keyIdentifier := flag & 0x0F
+	if keyIdentifier != 0x04 && keyIdentifier != 0x0C { // 兼容V4和旧的V12
+		return nil, fmt.Errorf("unsupported key identifier 0x%x", keyIdentifier)
+	}
 	keyIndex := (flag >> 4) & 0x0F
+	if int(keyIndex) >= len(keys) {
+		return nil, fmt.Errorf("key index %d out of range", keyIndex)
+	}
 	keyBytes, err := hex.DecodeString(keys[keyIndex])
 	if err != nil {
 		return nil, err
 	}
+	iv := payload[:aes.BlockSize]
+	cipherText := payload[aes.BlockSize : len(payload)-1]
 
 	block, err := aes.NewCipher(keyBytes)
 	if err != nil {
 		return nil, err
 	}
+	plain := make([]byte, len(cipherText))
+	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plain, cipherText)
 
-	mode := cipher.NewCBCDecrypter(block, iv)
-	plainText := make([]byte, len(cipherText))
-	mode.CryptBlocks(plainText, cipherText)
-
-	// 移除尾部的零字节
-	lastNonZero := len(plainText) - 1
-	for lastNonZero >= 0 && plainText[lastNonZero] == 0 {
-		lastNonZero--
+	// 去除尾部0填充
+	end := len(plain) - 1
+	for end >= 0 && plain[end] == 0 {
+		end--
 	}
-	if lastNonZero < 0 {
-		return []byte{}, nil
+	if end < 0 {
+		return nil, fmt.Errorf("decrypted data is empty")
 	}
+	trimmed := plain[:end+1]
 
-	return plainText[:lastNonZero+1], nil
+	// TypeScript: `.subarray(0, -16)` — 去掉最后16字节randFill
+	if len(trimmed) < 16 {
+		return nil, fmt.Errorf("decrypted content shorter than randFill")
+	}
+	result := trimmed[:len(trimmed)-16]
+
+	// 如果末尾是换行符，直接保留即可（JSON解析能容忍）
+	return result, nil
 }
 
 // 计算动态token

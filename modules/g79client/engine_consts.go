@@ -3,7 +3,7 @@ package g79client
 const (
 	g79AndroidStep       = "695616851"
 	g79AndroidStep2      = "2146985406"
-	g79LibraryHash       = "c50629910b3d5a1a32a1b47fe7a94bfa"
+	g79LibraryHash       = "260a8b0499822c3f4fb4e35e8051afab" // 3.9.15.297907 提取的 libminecraftpe.so
 	g79SignatureHash     = "2b3e7ca013bb30a74d822579860c042b"
 	g79BaseMCPHash       = ""
 	g79AndroidMessageTag = "dashen_cloudgame"

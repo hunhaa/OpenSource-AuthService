@@ -102,8 +102,8 @@ func resolveHTTPClient(httpClient *http.Client) *http.Client {
 
 func init() {
 	globalG79PatchMeta = &PatchMetadata{
-		Version:       "3.8.41.296398",
-		ResourcesHash: "ef96df71f1c99d7c93d8d388d67771a8",
+		Version:       "3.9.23.298289",        // 最新Patch版本 (Android 热更 patch_list)
+		ResourcesHash: "6de7bebd5d40b50f01f92d2b6dc9b095", // 3.9.23 对应资源Hash
 	}
 
 	// 在包初始化时尝试预取；失败则忽略，后续调用会再次尝试

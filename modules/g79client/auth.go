@@ -342,7 +342,7 @@ func (c *Client) g79PerformPEAuthWithCookie(sauthData *SauthData, cookieData *Co
 	}
 
 	versionMessage := fmt.Sprintf("%s%s%s%s%s%s", c.EngineVersion, g79LibraryHash, c.G79LatestVersion, c.patchResourcesHash, g79SignatureHash, seed)
-	sign, err := utils.PeAuthSign(versionMessage, 4, 7)
+	sign, err := utils.PeAuthSign(versionMessage, 3, 6) // 3.9 版本参数：sp=3, tr=6
 	if err != nil {
 		return fmt.Errorf("计算签名失败: %w", err)
 	}
@@ -482,7 +482,7 @@ func buildAndroidSauthPayload(sauthData *SauthData, clientLoginSN string) map[st
 func buildAndroidSaDataPayload(c *Client, sauthData *SauthData, cookieData *CookieData) map[string]any {
 	sdkVersion := strings.TrimSpace(sauthData.SDKVersion)
 	if sdkVersion == "" {
-		sdkVersion = "5.9.0"
+		sdkVersion = "5.16.0" // 3.9对应SDK版本
 	}
 	udid := sauthData.UDID
 	if strings.TrimSpace(udid) == "" {
@@ -492,30 +492,34 @@ func buildAndroidSaDataPayload(c *Client, sauthData *SauthData, cookieData *Cook
 	if appChannel == "" {
 		appChannel = "netease"
 	}
+	appVer := c.G79LatestVersion
+	if appVer == "" {
+		appVer = "3.9.23.298289"
+	}
 
 	return map[string]any{
 		"app_channel":   appChannel,
-		"app_ver":       "3.3.15.268037", //c.G79LatestVersion,
+		"app_ver":       appVer,
 		"core_num":      "u0004",
 		"cpu_digit":     "64",
 		"cpu_hz":        "2465600",
 		"cpu_name":      "placeholder",
-		"device_height": "900",
-		"device_model":  "SAMSUNG#SM-G977N",
-		"device_width":  "1600",
+		"device_height": "2400",
+		"device_model":  "Xiaomi#23116PN5BC",
+		"device_width":  "1080",
 		"disk":          "",
 		"emulator":      cookieData.emulatorFlag(),
 		"first_udid":    udid,
 		"is_guest":      cookieData.isGuestFlag(),
 		"launcher_type": "PE_C++",
 		"mac_addr":      cookieData.macAddress(),
-		"network":       "CHANNEL_UNKNOW", //"mm_10086",
+		"network":       "CHANNEL_UNKNOW",
 		"os_name":       "android",
-		"os_ver":        "5.1.1",
+		"os_ver":        "13",
 		"ram":           cookieData.ramValue(),
 		"rom":           cookieData.romValue(),
 		"root":          false,
-		"sdk_ver":       "5.2.0", //sdkVersion,
+		"sdk_ver":       sdkVersion,
 		"start_type":    "default",
 		"udid":          udid,
 	}
@@ -931,6 +935,10 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 	respBody, err := readResponseBody(resp)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode != 200 || len(respBody) == 0 {
+		return nil, fmt.Errorf("AuthV2响应异常 status=%d body=%q，请先完成Link连接+SendGameStart再调用AuthV2",
+			resp.StatusCode, string(respBody))
 	}
 
 	encryptedResp, err := hex.DecodeString(string(respBody))
