@@ -79,6 +79,33 @@
       <span id="auth-msg" class="msg"></span>
     </div>
     <div id="auth-result" class="result hidden"></div>
+
+    <div id="fbtoken-box" class="fbtoken-box hidden">
+      <div class="fbtoken-header">
+        <h3>🎫 FBToken（ToolDelta / NeoOmega 验证服务器用）</h3>
+        <button id="btn-copy-fbtoken" class="ghost small">📋 复制 fbtoken</button>
+      </div>
+      <div class="row" style="flex-direction:column;gap:6px">
+        <label>fbtoken</label>
+        <input id="fbtoken" type="text" readonly class="mono big">
+      </div>
+      <div class="grid-2" style="margin-top:10px">
+        <div>
+          <label>验证服务器地址（ToolDelta 配置项）</label>
+          <div class="row" style="gap:6px">
+            <input id="auth-server-url" type="text" readonly class="mono">
+            <button id="btn-copy-authurl" class="ghost small">📋 复制</button>
+          </div>
+        </div>
+        <div>
+          <label>使用说明</label>
+          <div class="hint small" style="margin-top:4px">
+            ToolDelta 配置 → 选择「Bunker-web 验证服务器 §a✔」→ 手动输入此处的地址；或启动时 <code>--auth-server &lt;auth_server_url&gt; -T &lt;fbtoken&gt;</code>。<br>
+            ⚠ NeoOmega 客户端默认只允许 host = <code>localhost / 127.0.0.1 / liliya233.uk / user.fastbuilder.pro</code>，其他 host 需修改 neomega-core 白名单或通过本地反向代理转发。
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- Step 2: Link -->

@@ -142,6 +142,9 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		}
 	}()
 
+	// FastBuilder / NeoOmega 验证服务器兼容端点（不加 /webui 前缀，保持协议路径）
+	RegisterFBAuthRoutes(api)
+
 	g := api.Group("/webui")
 	{
 		g.GET("/status", HandleStatus)
@@ -265,8 +268,12 @@ func HandleAuth(c *gin.Context) {
 	}
 	storeSession(s)
 
+	// 签发 FBToken 供 ToolDelta / NeoOmega 作为验证服务器使用
+	fbtoken := IssueFBTokenBySession(token)
+
 	ok(c, gin.H{
 		"token":          token,
+		"fb_token":       fbtoken,
 		"user_id":        cli.UserID,
 		"nickname":       nickname,
 		"level":          safeLevel(cli),

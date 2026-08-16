@@ -90,3 +90,23 @@ footer .sub{opacity:.7}
 .toast .it.ok{border-color:#1f5a37;color:#b9f2ce}
 .toast .it.err{border-color:#5a1f1f;color:#ffc2c2}
 @keyframes pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+
+/* ===== FBToken Box ===== */
+.fbtoken-box{
+  margin-top:18px;padding:14px 16px;
+  border:1px solid #2a3552;border-radius:12px;
+  background:linear-gradient(180deg, rgba(78,167,255,.08) 0%, rgba(124,240,198,.05) 60%, transparent 100%);
+}
+.fbtoken-box.hidden{display:none}
+.fbtoken-header{
+  display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;
+}
+.fbtoken-header h3{margin:0;font-size:14.5px;color:#a7ccff}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+input.mono.big{
+  padding:10px 12px;font-size:13px;letter-spacing:0.3px;
+  background:#0a0f1c;border:1px solid #2a3552;border-radius:8px;width:100%;
+  color:#b9e0ff;user-select:all;
+}
+button.small{font-size:12px;padding:7px 12px}
+.hint.small{font-size:12px;line-height:1.75}

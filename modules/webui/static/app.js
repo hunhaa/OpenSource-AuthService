@@ -48,7 +48,38 @@ async function getStatus(){
 function renderAuthResult(d){
   const box = $("#auth-result");
   box.classList.remove("hidden");
-  box.textContent = JSON.stringify(d, null, 2);
+  const shallow = Object.assign({}, d);
+  // 结果面板里不重复 fb_token，避免视觉干扰
+  delete shallow.fb_token;
+  box.textContent = JSON.stringify(shallow, null, 2);
+}
+function showFBToken(d){
+  const fbBox = document.getElementById("fbtoken-box");
+  const fbt = document.getElementById("fbtoken");
+  const urlInput = document.getElementById("auth-server-url");
+  if(d && d.fb_token){
+    fbt.value = d.fb_token;
+    const proto = location.protocol;
+    // 去掉末尾 /api/webui，ToolDelta 要的是验证服务器根地址（会自行拼 /api/new 与 /api/phoenix/login）
+    const base = proto + "//" + location.host;
+    urlInput.value = base;
+    fbBox.classList.remove("hidden");
+  } else {
+    fbBox.classList.add("hidden");
+    fbt.value = "";
+    urlInput.value = "";
+  }
+}
+function copyText(el){
+  const v = (el.value || el.textContent || "").toString();
+  if(!v) return;
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(v).then(()=>toast("已复制: "+v.slice(0,28)+(v.length>28?"…":""),"ok"));
+  } else {
+    el.select && el.select();
+    document.execCommand("copy");
+    toast("已复制","ok");
+  }
 }
 function renderSearchResults(entities){
   const box = $("#search-result");
@@ -130,6 +161,7 @@ async function doAuth(){
     localStorage.setItem("bunker_token", currentToken);
     setMsg("auth-msg", "认证成功 uid="+d.user_id, "ok");
     renderAuthResult(d);
+    showFBToken(d);
     setEnabled("card-link", true);
     setEnabled("card-search", true);
     toast("登录成功","ok");
@@ -273,6 +305,14 @@ document.addEventListener("DOMContentLoaded", ()=>{
   $("#btn-reg-preset2").addEventListener("click", regPreset);
   $("#btn-register").addEventListener("click", doRegister);
   $("#btn-reg-fill").addEventListener("click", regFill);
+
+  // fbtoken box
+  if(document.getElementById("btn-copy-fbtoken")){
+    document.getElementById("btn-copy-fbtoken").addEventListener("click", ()=>copyText(document.getElementById("fbtoken")));
+  }
+  if(document.getElementById("btn-copy-authurl")){
+    document.getElementById("btn-copy-authurl").addEventListener("click", ()=>copyText(document.getElementById("auth-server-url")));
+  }
 
   $("#btn-auth").addEventListener("click", doAuth);
   $("#btn-link-start").addEventListener("click", doLinkStart);
