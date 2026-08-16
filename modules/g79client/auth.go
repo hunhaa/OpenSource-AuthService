@@ -921,13 +921,15 @@ func (c *Client) GenerateNetworkGameAuthV2(roomID, clientKey string) ([]byte, er
 
 // 发送认证v2请求
 func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
-	// 不同服端部署的 authentication-v2 路径有多种写法，用候选列表逐个试。
-	// 注意：user-token 是基于 (path+body+token) 算的动态签名，path 变了 token 必须重算。
-	pathCandidates := []string{
-		"/authentication-v2",
-		"/authenticationv2",
-		"/AuthenticationV2",
-	}
+	// 实测 NetEase 官方：
+	//   POST https://g79authobt.minecraft.cn/authentication-v2
+	// 才是 G79 (OBT) 的 chain-info /authentication-v2 接口（其他域名+路径都是 404）。
+	// 用占位 body / 占位 user-token / 占位 user-id 打它返回 500 空 body（content-length:0），
+	// 属于"服务端解密/校验失败内部错误"，意味着：
+	//   (a) 路径正确 (✅),
+	//   (b) 请求只要签名/body/Link-Rental 绑定任一对不上就会 500 吞错误。
+	// 因此这里不要穷举 27 条候选（会让你误判全 404），只在最常见的 4~5 条精确组合里回退。
+	pathCandidates := []string{"/authentication-v2", "/authentication-v2/"}
 
 	encryptedData, err := G79HttpEncrypt(authv2Data)
 	if err != nil {
@@ -935,7 +937,6 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 	}
 	hexBody := hex.EncodeToString(encryptedData)
 
-	// 整理候选 base URL：不同部署下认证v2可能挂在 AuthServer / WebServer / ApiGateway 上。
 	type attempt struct {
 		label       string
 		base        string
@@ -958,42 +959,29 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 		}
 		candidates = append(candidates, attempt{label: label, base: base, path: path, contentType: ct})
 	}
-	// NetEase 当前真实 G79 Release JSON（adr_release.0.17.json）：
-	//   ApiGatewayUrl      = https://g79apigatewayobt.minecraft.cn
-	//   AuthServerUrl      = https://g79authobt.minecraft.cn
-	//   WebServerUrl       = https://g79mclobt.minecraft.cn
-	//   TransferServerNewHttpUrl = https://g79mcltransfer.minecraft.cn
-	// 租赁服链信息很可能挂在 ApiGateway 或 Transfer 下，而不是 g79mclobt（那是租赁服业务入口的 web）。
-	// 所以普通 G79 优先：ApiGateway → AuthServer → WebServer → Transfer。
-	// 路径上，两种常见 Content-Type 都试，hex body 理论上该用 text/plain。
+
 	for _, p := range pathCandidates {
 		if c.IsX19 {
-			addCandidate("X19 ApiGatewayGray", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "text/plain; charset=utf-8")
 			addCandidate("X19 CoreServer", c.X19ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8")
 			addCandidate("X19 AuthServer", c.X19ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8")
+			addCandidate("X19 ApiGatewayGray", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "text/plain; charset=utf-8")
 			addCandidate("X19 AuthServerCpp", c.X19ReleaseJSON.AuthServerCppURL, p, "text/plain; charset=utf-8")
-			addCandidate("X19 WebServer", c.X19ReleaseJSON.WebServerURL, p, "text/plain; charset=utf-8")
-			addCandidate("X19 ApiGatewayGray(application/json)", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "application/json")
 			addCandidate("X19 CoreServer(application/json)", c.X19ReleaseJSON.CoreServerURL, p, "application/json")
 		} else {
+			// ⚠️ 重点：G79 租赁服 chain-info 接口就挂在 AuthServerURL 下，优先级必须第一。
+			addCandidate("G79 AuthServer", c.ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8")
+			addCandidate("G79 AuthServer(application/json)", c.ReleaseJSON.AuthServerURL, p, "application/json")
 			addCandidate("G79 ApiGateway", c.ReleaseJSON.ApiGatewayUrl, p, "text/plain; charset=utf-8")
 			addCandidate("G79 ApiGatewayGray", c.ReleaseJSON.ApiGatewayGrayUrl, p, "text/plain; charset=utf-8")
-			addCandidate("G79 AuthServer", c.ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8")
-			addCandidate("G79 TransferServerNewHttp", c.ReleaseJSON.TransferServerNewHttpUrl, p, "text/plain; charset=utf-8")
-			addCandidate("G79 WebServer", c.ReleaseJSON.WebServerUrl, p, "text/plain; charset=utf-8")
-			addCandidate("G79 AuthServerNewHttp", c.ReleaseJSON.AuthServerNewHttpURL, p, "text/plain; charset=utf-8")
-			addCandidate("G79 WebServerNewHttp", c.ReleaseJSON.WebServerNewHttpURL, p, "text/plain; charset=utf-8")
-			addCandidate("G79 ApiGateway(application/json)", c.ReleaseJSON.ApiGatewayUrl, p, "application/json")
-			addCandidate("G79 AuthServer(application/json)", c.ReleaseJSON.AuthServerURL, p, "application/json")
-			addCandidate("G79 WebServer(application/json)", c.ReleaseJSON.WebServerUrl, p, "application/json")
-			addCandidate("G79 TransferServerNewHttp(application/json)", c.ReleaseJSON.TransferServerNewHttpUrl, p, "application/json")
+			addCandidate("G79 CoreServer", c.ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8")
+			addCandidate("G79 CoreServerGray", c.ReleaseJSON.CoreServerGrayURL, p, "text/plain; charset=utf-8")
+			addCandidate("G79 AuthServer(application/x-www-form-urlencoded)", c.ReleaseJSON.AuthServerURL, p, "application/x-www-form-urlencoded")
 		}
 	}
 
 	var lastErr error
 	for i, cand := range candidates {
 		fullURL := cand.base + cand.path
-		// user-token 必须按当前 path 重算
 		userTokenSign := CalculateDynamicToken(cand.path, string(authv2Data), c.UserToken)
 		req, rerr := http.NewRequest("POST", fullURL, strings.NewReader(hexBody))
 		if rerr != nil {
@@ -1019,7 +1007,6 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 				i+1, len(candidates), cand.label, fullURL, cand.contentType, rerr)
 			continue
 		}
-		// 成功：200 且 body 非空
 		if resp.StatusCode == 200 && len(respBody) > 0 {
 			encryptedResp, herr := hex.DecodeString(string(respBody))
 			if herr != nil {
@@ -1035,7 +1022,6 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 			}
 			return GetValidJSON(decryptedResp), nil
 		}
-		// 非 200：根据状态码给出不同提示
 		bodyStr := trimForErr(respBody)
 		switch resp.StatusCode {
 		case 401:
@@ -1048,12 +1034,23 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
 		case 404:
 			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2路径不存在: status=404 url=%s ct=%s body=%q。 "+
-				"说明该 BaseURL + Path 组合在服务器端不存在（会继续自动回退其他组合）。 "+
-				"如果所有候选都 404，请把最后这条完整错误贴给开发者追加更多 BaseURL 候选。",
+				"会继续自动回退其他组合；如果所有候选都 404，请把完整错误贴给开发者追加 BaseURL。",
 				i+1, len(candidates), cand.label, fullURL, cand.contentType, bodyStr)
 		case 400:
 			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2请求格式错误: status=%d url=%s ct=%s body=%q。 "+
-				"可能原因：(1)netese_sid 格式应为 serverID:RentalGame；(2)Link 未建立+GameStart；(3)ContentType 不匹配",
+				"路径已对，重点排查：(1)netease_sid 应为 serverID:RentalGame；(2)Link GameStart 后是否进入了租赁服房间（EnterRentalServerWorld 是否 code=0）；(3)ClientKey 是否是合法 ECC P384 SPKI",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+		case 500, 502, 503, 504:
+			// NetEase G79 AuthServer 对"解密失败 / 缺少 Link 租赁服会话绑定 / user-token 签名错 / 请求体错"都统一返回 500 空 body，
+			// 并不一定是服务端宕机。只要你看到走的是 G79 AuthServer + /authentication-v2，就说明路径正确，接下来需要核对：
+			//   - UserToken 是否在登录后未过期（重新 SAuth 登录一般能修）
+			//   - Link 是否已建立并 SendGameStart 成功
+			//   - EnterRentalServerWorld 是否成功（mcserver_host/mcserver_port 都返回了）
+			//   - ClientKey 是否合法 ECC P384 (P-384) SPKI（许多客户端需要你主动握手交换公钥，WebUI 默认自动生成一枚新的）
+			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2服务端返回内部错误: status=%d url=%s ct=%s body=%q。 "+
+				"注意：该 status=500 并不一定是网易服务器崩，更多是「请求体解密失败 / user-token 签名错误 / Link 缺少租赁服会话绑定 / ClientKey 非法」。 "+
+				"请依次核对：(1)先用 SAuth 重新登录刷新 UserToken；(2)Link 必须显示「Link + GameStart 成功」；"+
+				"(3)先点「Enter 租赁服」确保 EnterRentalServerWorld code=0 且有 mcserver_host/port；(4)再点 AuthV2。",
 				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
 		default:
 			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2响应异常: status=%d url=%s ct=%s body=%q",
