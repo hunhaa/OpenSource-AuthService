@@ -471,12 +471,8 @@ func RegisterPhoenixLoginRoute(api *gin.RouterGroup) {
 		}
 
 		if cli.UserDetail != nil && strings.TrimSpace(cli.UserDetail.Name) == "" {
-			prefix := authenticatedUser.NicknamePrefix
-			if prefix == "" {
-				prefix = "HZ"
-			}
-			newName := fmt.Sprintf("%s%08d", prefix, random.Intn(100000000))
-			cli.UpdateNickname(newName)
+			// 辅助账号没有名字 → 自动改为 nklm_XXXXX（5 位随机数字）；冲突时回退到用户配置的 prefix
+			_ = g79client.EnsureNicknameNKLMIfEmpty(cli, authenticatedUser.NicknamePrefix)
 		}
 
 		var skinInfo SkinInfo

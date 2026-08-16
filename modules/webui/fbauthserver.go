@@ -340,6 +340,12 @@ func createSessionFromCookie(cookie string, tagName string) (string, string, str
 	if cli.UserDetail != nil {
 		nickname = cli.UserDetail.Name
 	}
+	if strings.TrimSpace(nickname) == "" {
+		// 辅助账号没有名字 → 改为 nklm_XXXXX
+		if err := g79client.EnsureNicknameNKLMIfEmpty(cli, "NKLM"); err == nil && cli.UserDetail != nil {
+			nickname = cli.UserDetail.Name
+		}
+	}
 	if nickname == "" {
 		nickname = tagName
 	}

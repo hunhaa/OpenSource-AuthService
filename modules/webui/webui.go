@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -249,10 +250,15 @@ func HandleAuth(c *gin.Context) {
 		return
 	}
 
-	// extract nickname from cookie (if any)
+	// extract nickname from cookie (if any). 辅助账号没名字时自动改成 nklm_XXXXX
 	nickname := ""
 	if cli.UserDetail != nil {
 		nickname = cli.UserDetail.Name
+	}
+	if strings.TrimSpace(nickname) == "" {
+		if err := g79client.EnsureNicknameNKLMIfEmpty(cli, "NKLM"); err == nil && cli.UserDetail != nil {
+			nickname = cli.UserDetail.Name
+		}
 	}
 
 	s := &Session{
