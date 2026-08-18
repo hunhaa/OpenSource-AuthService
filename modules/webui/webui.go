@@ -466,22 +466,58 @@ func HandleRentalAuthV2(c *gin.Context) {
 		return
 	}
 
-	data, err := s.Client.GenerateRentalGameAuthV2(req.ServerID, clientPublicKey)
-	if err != nil {
-		fail(c, 500, "生成AuthV2失败: %v", err)
-		return
+	// 两种字段组合依次尝试：先 PC 版（os=windows patchVersion空），失败再试 PE 版（os=android）
+	// 两种变体同时尝试可以覆盖不同服务器类型对字段的要求
+	type variant struct {
+		name string
+		gen  func() ([]byte, error)
 	}
-	chainInfo, err := s.Client.SendAuthV2Request(data)
-	if err != nil {
-		fail(c, 502, "AuthV2请求失败: %v", err)
-		return
+	variants := []variant{
+		{
+			name: "PC版(os=windows,patch=\"\",platform=pc,pcCheck=0)",
+			gen: func() ([]byte, error) {
+				return s.Client.GeneratePCRentalGameAuthV2(req.ServerID, clientPublicKey)
+			},
+		},
+		{
+			name: "PE版(os=android,patch=latest,platform=android)",
+			gen: func() ([]byte, error) {
+				return s.Client.GenerateRentalGameAuthV2(req.ServerID, clientPublicKey)
+			},
+		},
 	}
-	ok(c, gin.H{
-		"server_id":       req.ServerID,
-		"chain_info_b64":  encodeB64(chainInfo),
-		"chain_info_hex":  hex.EncodeToString(chainInfo),
-		"chain_info_len":  len(chainInfo),
-	})
+
+	var firstErr error
+	var lastErr error
+	for vi, v := range variants {
+		data, gerr := v.gen()
+		if gerr != nil {
+			lastErr = fmt.Errorf("[%s] 生成AuthV2失败: %w", v.name, gerr)
+			if firstErr == nil {
+				firstErr = lastErr
+			}
+			continue
+		}
+		chainInfo, aerr := s.Client.SendAuthV2Request(data)
+		if aerr == nil {
+			ok(c, gin.H{
+				"server_id":       req.ServerID,
+				"used_variant":    v.name,
+				"chain_info_b64":  encodeB64(chainInfo),
+				"chain_info_hex":  hex.EncodeToString(chainInfo),
+				"chain_info_len":  len(chainInfo),
+			})
+			return
+		}
+		lastErr = fmt.Errorf("[%s] AuthV2请求失败: %w", v.name, aerr)
+		if firstErr == nil {
+			firstErr = lastErr
+		}
+		_ = vi
+	}
+
+	// 两种都失败，返回最后一个的详细错误（含汇总表），并在开头说明两种都试过了
+	fail(c, 502, "AuthV2两种字段组合均失败。%v", lastErr)
 }
 
 // ---------- small utils ----------
