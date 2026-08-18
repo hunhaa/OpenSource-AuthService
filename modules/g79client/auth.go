@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -921,14 +922,8 @@ func (c *Client) GenerateNetworkGameAuthV2(roomID, clientKey string) ([]byte, er
 
 // 发送认证v2请求
 func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
-	// 实测 NetEase 官方：
-	//   POST https://g79authobt.minecraft.cn/authentication-v2
-	// 才是 G79 (OBT) 的 chain-info /authentication-v2 接口（其他域名+路径都是 404）。
-	// 用占位 body / 占位 user-token / 占位 user-id 打它返回 500 空 body（content-length:0），
-	// 属于"服务端解密/校验失败内部错误"，意味着：
-	//   (a) 路径正确 (✅),
-	//   (b) 请求只要签名/body/Link-Rental 绑定任一对不上就会 500 吞错误。
-	// 因此这里不要穷举 27 条候选（会让你误判全 404），只在最常见的 4~5 条精确组合里回退。
+	// 实证定位：G79(OBT) chain-info 认证 v2 接口挂在 AuthServerURL 下 /authentication-v2。
+	// 注意：网易 G79 网关对"不合规请求"可能返回 400/500 空 body，需要靠尝试排序和汇总表定位。
 	pathCandidates := []string{"/authentication-v2", "/authentication-v2/"}
 
 	encryptedData, err := G79HttpEncrypt(authv2Data)
@@ -938,13 +933,15 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 	hexBody := hex.EncodeToString(encryptedData)
 
 	type attempt struct {
-		label       string
-		base        string
-		path        string
-		contentType string
+		label         string
+		base          string
+		path          string
+		contentType   string
+		querySuffix   string // 例如 "?user-id=xxx"
+		sendBinary    bool   // true 时直接发 encryptedData，不 hex encode
 	}
 	candidates := []attempt{}
-	addCandidate := func(label, base, path, ct string) {
+	addCandidate := func(label, base, path, ct, qs string, sendBin bool) {
 		base = strings.TrimRight(base, "/")
 		if base == "" || path == "" {
 			return
@@ -953,39 +950,99 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 			path = "/" + path
 		}
 		for _, c := range candidates {
-			if c.base == base && c.path == path && c.contentType == ct {
+			if c.base == base && c.path == path && c.contentType == ct && c.querySuffix == qs && c.sendBinary == sendBin {
 				return
 			}
 		}
-		candidates = append(candidates, attempt{label: label, base: base, path: path, contentType: ct})
+		candidates = append(candidates, attempt{
+			label: label, base: base, path: path, contentType: ct,
+			querySuffix: qs, sendBinary: sendBin,
+		})
 	}
 
+	qs := "" // 预留：?user-id=xxx&ns=RentalGame (后续若需要 query string 就开)
 	for _, p := range pathCandidates {
 		if c.IsX19 {
-			addCandidate("X19 CoreServer", c.X19ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8")
-			addCandidate("X19 AuthServer", c.X19ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8")
-			addCandidate("X19 ApiGatewayGray", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "text/plain; charset=utf-8")
-			addCandidate("X19 AuthServerCpp", c.X19ReleaseJSON.AuthServerCppURL, p, "text/plain; charset=utf-8")
-			addCandidate("X19 CoreServer(application/json)", c.X19ReleaseJSON.CoreServerURL, p, "application/json")
+			addCandidate("X19 CoreServer", c.X19ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("X19 AuthServer", c.X19ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("X19 ApiGatewayGray", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("X19 AuthServerCpp", c.X19ReleaseJSON.AuthServerCppURL, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("X19 CoreServer(application/json)", c.X19ReleaseJSON.CoreServerURL, p, "application/json", qs, false)
 		} else {
-			// ⚠️ 重点：G79 租赁服 chain-info 接口就挂在 AuthServerURL 下，优先级必须第一。
-			addCandidate("G79 AuthServer", c.ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8")
-			addCandidate("G79 AuthServer(application/json)", c.ReleaseJSON.AuthServerURL, p, "application/json")
-			addCandidate("G79 ApiGateway", c.ReleaseJSON.ApiGatewayUrl, p, "text/plain; charset=utf-8")
-			addCandidate("G79 ApiGatewayGray", c.ReleaseJSON.ApiGatewayGrayUrl, p, "text/plain; charset=utf-8")
-			addCandidate("G79 CoreServer", c.ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8")
-			addCandidate("G79 CoreServerGray", c.ReleaseJSON.CoreServerGrayURL, p, "text/plain; charset=utf-8")
-			addCandidate("G79 AuthServer(application/x-www-form-urlencoded)", c.ReleaseJSON.AuthServerURL, p, "application/x-www-form-urlencoded")
+			// G79 租赁服 chain-info：AuthServer 下 /authentication-v2 为最高优先级。
+			// 尝试顺序按"服务端接受概率 + 与已有 SendSignedRequest 一致性"排列：
+			//   (1) text/plain + hex body
+			//   (2) application/octet-stream + 原始加密二进制（有的网关 hex 直接 400）
+			//   (3) application/json + hex body（兼容旧协议实现）
+			//   (4) x-www-form-urlencoded（兜底）
+			// 对 (1) 再追加 ApiGateway / CoreServer 回退。
+			addCandidate("G79 AuthServer", c.ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("G79 AuthServer(binary octet-stream)", c.ReleaseJSON.AuthServerURL, p, "application/octet-stream", qs, true)
+			addCandidate("G79 AuthServer(application/json)", c.ReleaseJSON.AuthServerURL, p, "application/json", qs, false)
+			addCandidate("G79 ApiGateway", c.ReleaseJSON.ApiGatewayUrl, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("G79 ApiGateway(binary octet-stream)", c.ReleaseJSON.ApiGatewayUrl, p, "application/octet-stream", qs, true)
+			addCandidate("G79 ApiGatewayGray", c.ReleaseJSON.ApiGatewayGrayUrl, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("G79 CoreServer", c.ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("G79 CoreServerGray", c.ReleaseJSON.CoreServerGrayURL, p, "text/plain; charset=utf-8", qs, false)
+			addCandidate("G79 AuthServer(x-www-form-urlencoded)", c.ReleaseJSON.AuthServerURL, p, "application/x-www-form-urlencoded", qs, false)
 		}
 	}
 
-	var lastErr error
+	// 记录每次尝试的结果，便于汇总
+	type tryResult struct {
+		idx    int
+		label  string
+		status int
+		url    string
+		ct     string
+		bin    bool
+	}
+	var results []tryResult
+	// bestErr 选"最接近成功"的错误：优先级 200>解密失败>5xx>401/403>400>404>网络错误。
+	var bestErr error
+	bestErrScore := -99999
+	scoreStatus := func(status int) int {
+		switch {
+		case status == 200:
+			return 10000
+		case status >= 500:
+			return 800 + status
+		case status == 401 || status == 403:
+			return 600 + status
+		case status == 400:
+			return 400 + status
+		case status == 404:
+			return 100
+		case status == 0:
+			return -1 // 网络错误
+		default:
+			return 300 + status
+		}
+	}
+	setBestErr := func(err error, status int) {
+		score := scoreStatus(status)
+		if score > bestErrScore {
+			bestErrScore = score
+			bestErr = err
+		}
+	}
+
 	for i, cand := range candidates {
-		fullURL := cand.base + cand.path
+		fullURL := cand.base + cand.path + cand.querySuffix
 		userTokenSign := CalculateDynamicToken(cand.path, string(authv2Data), c.UserToken)
-		req, rerr := http.NewRequest("POST", fullURL, strings.NewReader(hexBody))
+
+		var bodyReader io.Reader
+		switch {
+		case cand.sendBinary:
+			bodyReader = bytes.NewReader(encryptedData)
+		default:
+			bodyReader = strings.NewReader(hexBody)
+		}
+		req, rerr := http.NewRequest("POST", fullURL, bodyReader)
 		if rerr != nil {
-			lastErr = fmt.Errorf("[尝试%d/%d %s] build request: %w", i+1, len(candidates), cand.label, rerr)
+			e := fmt.Errorf("[尝试%d/%d %s] build request: %w", i+1, len(candidates), cand.label, rerr)
+			results = append(results, tryResult{i + 1, cand.label, 0, fullURL, cand.contentType, cand.sendBinary})
+			setBestErr(e, 0)
 			continue
 		}
 		req.Header.Set("User-Agent", "WPFLauncher/0.0.0.0")
@@ -996,71 +1053,99 @@ func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
 
 		resp, derr := c.httpClient.Do(req)
 		if derr != nil {
-			lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): do=%w",
-				i+1, len(candidates), cand.label, fullURL, cand.contentType, derr)
+			e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v): do=%w",
+				i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, derr)
+			results = append(results, tryResult{i + 1, cand.label, 0, fullURL, cand.contentType, cand.sendBinary})
+			setBestErr(e, 0)
 			continue
 		}
 		respBody, rerr := readResponseBody(resp)
 		_ = resp.Body.Close()
+		results = append(results, tryResult{i + 1, cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary})
 		if rerr != nil {
-			lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): read body=%w",
-				i+1, len(candidates), cand.label, fullURL, cand.contentType, rerr)
+			e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v): read body=%w",
+				i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, rerr)
+			setBestErr(e, resp.StatusCode)
 			continue
 		}
 		if resp.StatusCode == 200 && len(respBody) > 0 {
 			encryptedResp, herr := hex.DecodeString(string(respBody))
 			if herr != nil {
-				lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): status=200 但 body 非 hex=%q: %w",
-					i+1, len(candidates), cand.label, fullURL, cand.contentType, trimForErr(respBody), herr)
+				e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v): status=200 但 body 非 hex=%q: %w",
+					i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, trimForErr(respBody), herr)
+				setBestErr(e, resp.StatusCode)
 				continue
 			}
 			decryptedResp, derr2 := G79HttpDecrypt(encryptedResp)
 			if derr2 != nil {
-				lastErr = fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s): status=200 解密失败: %w",
-					i+1, len(candidates), cand.label, fullURL, cand.contentType, derr2)
+				e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v): status=200 解密失败: %w",
+					i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, derr2)
+				setBestErr(e, resp.StatusCode)
 				continue
 			}
 			return GetValidJSON(decryptedResp), nil
 		}
 		bodyStr := trimForErr(respBody)
+		var e error
 		switch resp.StatusCode {
 		case 401:
-			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2未授权: status=%d url=%s ct=%s body=%q。 "+
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2未授权: status=%d url=%s ct=%s bin=%v body=%q。 "+
 				"请先完成Link连接 + SendGameStart 再调用 AuthV2，或重新登录 G79 刷新 UserToken",
-				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, bodyStr)
 		case 403:
-			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2被拒绝: status=%d url=%s ct=%s body=%q。 "+
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2被拒绝: status=%d url=%s ct=%s bin=%v body=%q。 "+
 				"可能是租赁服未开 / 服务器号无效 / UserToken 无权限（重新登录获取新Token再试）",
-				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, bodyStr)
 		case 404:
-			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2路径不存在: status=404 url=%s ct=%s body=%q。 "+
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2路径不存在: status=404 url=%s ct=%s bin=%v body=%q。 "+
 				"会继续自动回退其他组合；如果所有候选都 404，请把完整错误贴给开发者追加 BaseURL。",
-				i+1, len(candidates), cand.label, fullURL, cand.contentType, bodyStr)
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, bodyStr)
 		case 400:
-			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2请求格式错误: status=%d url=%s ct=%s body=%q。 "+
-				"路径已对，重点排查：(1)netease_sid 应为 serverID:RentalGame；(2)Link GameStart 后是否进入了租赁服房间（EnterRentalServerWorld 是否 code=0）；(3)ClientKey 是否是合法 ECC P384 SPKI",
-				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2请求格式错误: status=%d url=%s ct=%s bin=%v body=%q。 "+
+				"路径已对，重点排查：(1)netease_sid 应为 serverID:RentalGame；(2)Link GameStart 后是否进入了租赁服房间（EnterRentalServerWorld 是否 code=0）；(3)ClientKey 是否是合法 ECC P384 SPKI；(4)尝试 binary/octet-stream 模式（本版已自动加该候选）",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, bodyStr)
 		case 500, 502, 503, 504:
-			// NetEase G79 AuthServer 对"解密失败 / 缺少 Link 租赁服会话绑定 / user-token 签名错 / 请求体错"都统一返回 500 空 body，
-			// 并不一定是服务端宕机。只要你看到走的是 G79 AuthServer + /authentication-v2，就说明路径正确，接下来需要核对：
-			//   - UserToken 是否在登录后未过期（重新 SAuth 登录一般能修）
-			//   - Link 是否已建立并 SendGameStart 成功
-			//   - EnterRentalServerWorld 是否成功（mcserver_host/mcserver_port 都返回了）
-			//   - ClientKey 是否合法 ECC P384 (P-384) SPKI（许多客户端需要你主动握手交换公钥，WebUI 默认自动生成一枚新的）
-			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2服务端返回内部错误: status=%d url=%s ct=%s body=%q。 "+
-				"注意：该 status=500 并不一定是网易服务器崩，更多是「请求体解密失败 / user-token 签名错误 / Link 缺少租赁服会话绑定 / ClientKey 非法」。 "+
-				"请依次核对：(1)先用 SAuth 重新登录刷新 UserToken；(2)Link 必须显示「Link + GameStart 成功」；"+
-				"(3)先点「Enter 租赁服」确保 EnterRentalServerWorld code=0 且有 mcserver_host/port；(4)再点 AuthV2。",
-				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2服务端返回内部错误: status=%d url=%s ct=%s bin=%v body=%q。 "+
+				"注意：status=500 更可能是「请求体解密失败 / user-token 签名错误 / Link 缺少租赁服会话绑定 / ClientKey 非法」而非服端崩。 "+
+				"核对：(1)重新 SAuth 登录刷新 UserToken；(2)Link+GameStart 成功；(3)Enter 租赁服 code=0；(4)再 AuthV2。",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, bodyStr)
 		default:
-			lastErr = fmt.Errorf("[尝试%d/%d %s] AuthV2响应异常: status=%d url=%s ct=%s body=%q",
-				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, bodyStr)
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2响应异常: status=%d url=%s ct=%s bin=%v body=%q",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, bodyStr)
 		}
+		setBestErr(e, resp.StatusCode)
 	}
-	if lastErr == nil {
-		return nil, fmt.Errorf("AuthV2: 未构造出任何候选请求（ReleaseJSON 字段均为空，请先 NewClient 初始化）")
+
+	// 拼接汇总表，方便一眼看出哪条最接近成功
+	var sb strings.Builder
+	sb.WriteString("\n========== AuthV2 全部候选尝试汇总表 ==========\n")
+	sb.WriteString(fmt.Sprintf("%-4s %-44s %-6s %-32s bin\n", "#", "LABEL", "STATUS", "CONTENT-TYPE"))
+	for _, r := range results {
+		binFlag := "hex"
+		if r.bin {
+			binFlag = "BIN"
+		}
+		label := r.label
+		if len(label) > 42 {
+			label = label[:42]
+		}
+		ct := r.ct
+		if len(ct) > 30 {
+			ct = ct[:30]
+		}
+		statusStr := fmt.Sprintf("%d", r.status)
+		if r.status == 0 {
+			statusStr = "ERR"
+		}
+		sb.WriteString(fmt.Sprintf("%-4d %-44s %-6s %-32s %s\n", r.idx, label, statusStr, ct, binFlag))
 	}
-	return nil, lastErr
+	sb.WriteString("================================================")
+	summary := sb.String()
+
+	if bestErr == nil {
+		return nil, fmt.Errorf("AuthV2: 未构造出任何候选请求（ReleaseJSON 字段均为空，请先 NewClient 初始化）%s", summary)
+	}
+	return nil, fmt.Errorf("%w%s", bestErr, summary)
 }
 
 // trimForErr 把日志里的 body 限制到合理长度，避免整包 hex 刷满错误信息。
