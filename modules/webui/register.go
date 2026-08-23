@@ -107,7 +107,8 @@ func HandleRegisterCom4399(c *gin.Context) {
 		req.Password = genPassword()
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	// 请稍后再试最多重试 6 次，每次等 5s，再加其他流程，预留充足时间
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 240*time.Second)
 	defer cancel()
 
 	result := gin.H{

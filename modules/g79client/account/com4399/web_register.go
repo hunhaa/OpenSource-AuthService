@@ -29,8 +29,9 @@ const (
 	webRegisterUserAgent            = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36"
 	webRegisterXRequestedWith       = "mark.via.gp"
 	webRegisterCryptoPassphrase     = "lzYW5qaXVqa"
-	maxWebRegisterPleaseWaitRetries = 0
+	maxWebRegisterPleaseWaitRetries = 6          // 请稍后再试 的重试次数
 	webRegisterRealNameSubmitDelay  = 500 * time.Millisecond
+	webRegisterPleaseWaitRetryDelay = 5 * time.Second // 每次请稍后再试后的等待时间（之前是 2s，太短会被再次限流）
 )
 
 var (
@@ -161,8 +162,15 @@ func (c *WebRegisterClient) Register(ctx context.Context, req WebRegisterRequest
 		}
 		err = c.submitRegistration(ctx, page, req)
 		for retry := 0; isWebRegisterPleaseWait(err) && retry < maxWebRegisterPleaseWaitRetries; retry++ {
+			log.Printf("[4399注册] 请稍后再试 第%d/%d次，等待%v后重新打开注册页…", retry+1, maxWebRegisterPleaseWaitRetries, webRegisterPleaseWaitRetryDelay)
 			if !waitWebRegisterRetry(ctx) {
 				return nil, ctx.Err()
+			}
+			// 请稍后再试 之后，老的 reg_req_id 已被风控标记，需要重新打开注册页拿新的 reg_req_id / sec
+			newPage, nErr := c.openRegistrationPage(ctx)
+			if nErr == nil {
+				c.pending = nil
+				page = newPage
 			}
 			err = c.submitRegistration(ctx, page, req)
 		}
@@ -210,7 +218,7 @@ func isWebRegisterPleaseWait(err error) bool {
 }
 
 func waitWebRegisterRetry(ctx context.Context) bool {
-	timer := time.NewTimer(2 * time.Second)
+	timer := time.NewTimer(webRegisterPleaseWaitRetryDelay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
