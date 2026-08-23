@@ -22,12 +22,17 @@ import (
 	g79client "github.com/Yeah114/g79client"
 )
 
+// BuildVersion 是 FunAuth 的 7 位版本代号，每次发版递增。
+// 版本号格式：PR + 5 位递增数字（如 PR00001、PR00002 …）。
+const BuildVersion = "PR00007"
+
 const banner = `
  ___              _   _         _   _
 |  _|_ _ ___   __| |_| |_  __ _| |_| |_
 |  _| | | . |_|. |  _|   |/ _. |  _|   |
 |_| |___/  _|_|___|__|_|_|\__,_|__|_|_|
-        |_|  FunAuth Unified CLI
+        |_|  FunAuth Unified CLI  v` + BuildVersion + `
+  ⚡ Pull-Request Build  ` + BuildVersion + `
 `
 
 func RunAsFlavor(flavor string, args []string) {
@@ -48,7 +53,7 @@ func runCLI(flavor string, args []string) {
 		printUsage(flavor)
 		return
 	case "-v", "--version", "version":
-		fmt.Printf("FunAuth %s (flavor=%s, go=%s)\n", versionStr(), flavor, runtime.Version())
+		fmt.Printf("FunAuth %s  build=%s  (flavor=%s, go=%s)\n", versionStr(), BuildVersion, flavor, runtime.Version())
 		return
 	}
 
