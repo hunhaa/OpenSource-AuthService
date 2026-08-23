@@ -162,6 +162,13 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		g.POST("/batch/enter", HandleBatchEnter)
 		g.POST("/batch/authv2", HandleBatchAuthV2)
 
+		// 批量注册机
+		g.POST("/batch/register", HandleBatchRegister)
+		g.POST("/batch/register/export", HandleExportBatchRegisterCSV)
+		g.POST("/batch/sfz/upload", HandleUploadSFZ)
+		g.POST("/batch/proxy/upload", HandleUploadProxies)
+		g.GET("/batch/stats", HandleStatsBatch)
+
 		// 注册 (Bunker 风格)
 		RegisterRegisterRoutes(g)
 	}

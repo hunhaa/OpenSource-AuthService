@@ -13,6 +13,7 @@
     <span class="title">BUNKER<small>WEB</small></span>
     <nav class="tabs">
       <button class="tab active" data-tab="tab-auth">登录认证</button>
+      <button class="tab" data-tab="tab-regbot">注册机</button>
       <button class="tab" data-tab="tab-batch">塞入</button>
       <button class="tab" data-tab="tab-register">账号注册</button>
     </nav>
@@ -147,6 +148,103 @@
   </section>
   </section><!-- /tab-auth -->
 
+  <!-- Regbot Panel: 批量注册机 -->
+  <section id="tab-regbot" class="tab-panel">
+    <section class="card">
+      <h2><span class="step">⚙</span> 参数配置</h2>
+      <p class="hint">基于 4 个仓库（JS4399MC / MCQTSS_4399register / boluoreg 4399Register / STBD1574 4399Register）的注册流程提炼，支持轻量 ptlogin.register.do 直连注册 + 代理轮换 + SFZ 池。</p>
+      <div class="grid-2">
+        <div>
+          <label>注册数量 <span class="regbot-stat" id="rb-sfz-cnt"></span></label>
+          <input id="rb-count" type="number" min="1" max="500" value="10" placeholder="1-500">
+        </div>
+        <div>
+          <label>并发数 <span class="regbot-stat" id="rb-proxy-cnt"></span></label>
+          <input id="rb-concurrency" type="number" min="1" max="32" value="3" placeholder="1-32">
+        </div>
+        <div>
+          <label>用户名前缀</label>
+          <input id="rb-uprefix" type="text" value="g79" placeholder="例如：g79">
+        </div>
+        <div>
+          <label>昵称前缀</label>
+          <input id="rb-nprefix" type="text" value="Fun" placeholder="例如：Fun">
+        </div>
+        <div>
+          <label>统一密码（留空自动生成）</label>
+          <input id="rb-password" type="text" placeholder="留空每号随机10位">
+        </div>
+        <div>
+          <label>注册间隔（秒）</label>
+          <input id="rb-delay" type="number" min="0" max="60" value="2" placeholder="0-60">
+        </div>
+      </div>
+      <div class="row" style="margin-top:14px;gap:18px;flex-wrap:wrap">
+        <label class="switch">
+          <input id="rb-use-direct" type="checkbox" checked>
+          <span>轻量模式 (ptlogin.register.do 直连，降低风控)</span>
+        </label>
+        <label class="switch">
+          <input id="rb-gen-sauth" type="checkbox" checked>
+          <span>生成 SAuth Cookie (注册后自动登录拿)</span>
+        </label>
+        <label class="switch">
+          <input id="rb-use-proxy" type="checkbox">
+          <span>每任务轮换代理（需先上传代理池）</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">📦</span> SFZ / 代理池上传</h2>
+      <div class="grid-2">
+        <div>
+          <label>SFZ 身份证库（支持 姓名----身份证号 / 姓名:身份证号 / CSV）</label>
+          <div class="row" style="gap:6px;margin-top:4px">
+            <input id="rb-sfz-file" type="file" accept=".txt,.csv">
+            <button id="rb-upload-sfz" class="ghost small">上传 SFZ</button>
+          </div>
+          <div class="hint small" id="rb-sfz-msg" style="margin-top:6px"></div>
+        </div>
+        <div>
+          <label>HTTP 代理池（每行一个，支持 user:pass@host:port）</label>
+          <div class="row" style="gap:6px;margin-top:4px">
+            <input id="rb-proxy-file" type="file" accept=".txt,.list">
+            <button id="rb-upload-proxy" class="ghost small">上传代理</button>
+          </div>
+          <div class="hint small" id="rb-proxy-msg" style="margin-top:6px"></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:18px">
+        <button id="rb-start" class="primary">🚀 开始批量注册</button>
+        <button id="rb-stop" class="ghost" disabled>⏹ 停止</button>
+        <span id="rb-msg" class="msg"></span>
+      </div>
+      <div id="rb-progress" class="regbot-progress hidden" style="margin-top:16px">
+        <div class="regbot-progress-bar"><div class="regbot-progress-fill" id="rb-progress-fill"></div></div>
+        <div class="regbot-progress-text" id="rb-progress-text">0 / 0</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">📊</span> 结果与导出</h2>
+      <div class="row" id="rb-summary" style="gap:10px;margin-bottom:12px">
+        <!-- 动态生成统计 chip -->
+      </div>
+      <div class="row" style="gap:6px;margin-bottom:14px;flex-wrap:wrap">
+        <button id="rb-export-csv" class="ghost small" disabled>📄 导出 CSV</button>
+        <button id="rb-export-txt" class="ghost small" disabled>📝 导出 账号----密码</button>
+        <button id="rb-export-sauth" class="ghost small" disabled>🎫 导出 SAuth</button>
+        <button id="rb-export-json" class="ghost small" disabled>📋 导出 JSON</button>
+        <label class="switch" style="margin-left:8px">
+          <input id="rb-success-only" type="checkbox" checked>
+          <span>仅成功项</span>
+        </label>
+      </div>
+      <div id="rb-results" class="regbot-results"></div>
+    </section>
+  </section><!-- /tab-regbot -->
+
   <!-- Batch Panel: 批量塞入 -->
   <section id="tab-batch" class="tab-panel">
     <section class="card">
@@ -190,7 +288,7 @@
 
 <footer>
   <div>适配版本：<b id="ev">—</b> · 补丁 <b id="pv">—</b></div>
-  <div class="sub"><span id="build-ver">⚡ PR00009</span> · 基于 g79client · 参考 Cynic158/Bunker-Web 与 CoozillaX/bunker-web 设计</div>
+  <div class="sub"><span id="build-ver">⚡ PR00010</span> · 基于 g79client · 参考 Cynic158/Bunker-Web 与 CoozillaX/bunker-web 设计</div>
 </footer>
 
 <script src="app.js"></script>

@@ -143,8 +143,39 @@ func RecognizeCaptcha(verifyURL string) (string, error) {
 	return recognizeCaptchaWithHTTPClient(verifyURL, http.DefaultClient)
 }
 
+// RecognizeCaptchaWithHTTPClient 通过 URL + 指定 HTTP client 识别验证码
 func RecognizeCaptchaWithHTTPClient(verifyURL string, client *http.Client) (string, error) {
 	return recognizeCaptchaWithHTTPClient(verifyURL, client)
+}
+
+// RecognizeCaptchaBytes 直接从内存字节识别验证码（适用于已下载到内存中的验证码图片）
+func RecognizeCaptchaBytes(imgBytes []byte) (string, error) {
+	eng, err := getCaptchaEngine()
+	if err != nil {
+		return "", err
+	}
+	tmpFile, err := os.CreateTemp("", "captcha_bytes_*.png")
+	if err != nil {
+		return "", fmt.Errorf("com4399: 创建临时文件失败: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmpFile.Write(imgBytes); err != nil {
+		tmpFile.Close()
+		return "", fmt.Errorf("com4399: 写入临时文件失败: %w", err)
+	}
+	tmpFile.Close()
+	img, err := imageutil.Open(tmpPath)
+	if err != nil {
+		return "", fmt.Errorf("com4399: 加载验证码图片失败: %w", err)
+	}
+	result, err := eng.Classification(img)
+	if err != nil {
+		return "", fmt.Errorf("com4399: 识别验证码失败: %w", err)
+	}
+	result = strings.TrimSpace(result)
+	log.Printf("[OCR] 直接识别字节结果: %s (长度: %d)", result, len(result))
+	return result, nil
 }
 
 func recognizeCaptchaWithHTTPClient(verifyURL string, client *http.Client) (string, error) {

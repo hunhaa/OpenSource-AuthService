@@ -132,3 +132,45 @@ button.small{font-size:12px;padding:7px 12px}
 .batch-res-detail{color:var(--sub);font-size:12px;font-family:ui-monospace,monospace;word-break:break-all}
 .batch-res-actions{display:flex;gap:6px;flex-shrink:0}
 #build-ver{display:inline-flex;align-items:center;gap:3px;font-weight:700;color:var(--accent,#6cf);background:rgba(108,204,255,.08);padding:2px 8px;border-radius:6px;font-size:11px}
+
+/* ===== Regbot Panel ===== */
+.regbot-stat{color:var(--brand2);font-size:11px;margin-left:6px;font-weight:700}
+.hint.small.ok{color:var(--ok)}
+.hint.small.err{color:var(--danger)}
+
+.regbot-progress{display:flex;flex-direction:column;gap:6px}
+.regbot-progress-bar{
+  height:8px;width:100%;background:#0c1220;border:1px solid var(--line);
+  border-radius:999px;overflow:hidden;
+}
+.regbot-progress-fill{
+  height:100%;width:0%;
+  background:linear-gradient(90deg,var(--brand2),var(--brand));
+  transition:width .4s ease;
+}
+.regbot-progress-text{font-size:12px;color:var(--sub);font-family:ui-monospace,monospace}
+.regbot-progress.hidden{display:none}
+
+.chip.ok{border-color:rgba(74,222,128,.3);background:rgba(74,222,128,.08);color:#b9f2ce}
+.chip.warn{border-color:rgba(255,209,102,.3);background:rgba(255,209,102,.08);color:#ffe8a6}
+.chip.err{border-color:rgba(255,107,107,.3);background:rgba(255,107,107,.08);color:#ffc2c2}
+
+.regbot-results{display:flex;flex-direction:column;gap:8px;max-height:520px;overflow-y:auto;padding-right:4px}
+.regbot-result-row{
+  background:#0c1220;border:1px solid var(--line);border-left:3px solid var(--line);
+  border-radius:10px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
+}
+.regbot-result-row.ok{border-left-color:var(--ok)}
+.regbot-result-row.err{border-left-color:var(--danger)}
+.regbot-result-row.warn{border-left-color:var(--warn)}
+.regbot-result-meta{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.regbot-result-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.regbot-result-idx{font-size:11px;color:var(--sub);font-weight:700;min-width:32px}
+.regbot-result-user{font-weight:700;color:#a7ccff;font-size:13px;min-width:100px}
+.regbot-result-status{font-size:12px;font-weight:600}
+.status-success{color:var(--ok)}
+.status-username_exist,.status-captcha_fail,.status-sfz_limit,.status-sfz_freq,.status-risk_control{color:var(--warn)}
+.status-error{color:var(--danger)}
+.regbot-result-detail{display:flex;gap:12px;flex-wrap:wrap;color:var(--sub);font-size:12px}
+.regbot-result-detail > span{display:inline-flex;gap:4px;align-items:center}
+.regbot-result-actions{display:flex;gap:6px;flex-shrink:0}

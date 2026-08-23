@@ -414,11 +414,267 @@ async function doBatchAuthV2(){
   }
 }
 
+// ---------- regbot flow (批量注册机) ----------
+let regbotLastResults = [];
+let regbotAbortCtrl = null;
+
+async function regbotRefreshStats(){
+  try{
+    const j = await (await fetch(API + "/batch/stats")).json();
+    if(j && j.ok){
+      const d = j.data || {};
+      const sfzEl = document.getElementById("rb-sfz-cnt");
+      const prxEl = document.getElementById("rb-proxy-cnt");
+      if(sfzEl) sfzEl.textContent = `· SFZ: ${d.sfz_count||0}`;
+      if(prxEl) prxEl.textContent = `· Proxy: ${d.proxy_count||0}`;
+    }
+  }catch(e){}
+}
+async function regbotUploadSFZ(){
+  const f = document.getElementById("rb-sfz-file");
+  const msg = document.getElementById("rb-sfz-msg");
+  if(!f.files || f.files.length===0){ toast("请先选择 SFZ 文件","err"); return; }
+  msg.textContent = "上传中…";
+  msg.classList.remove("ok","err");
+  const fd = new FormData();
+  fd.append("sfz_file", f.files[0]);
+  try{
+    const r = await fetch(API + "/batch/sfz/upload", {method:"POST", body: fd});
+    const j = await r.json();
+    if(!j.ok) throw new Error(j.msg || "上传失败");
+    msg.textContent = `✅ SFZ 导入成功，共 ${j.data.count||0} 条`;
+    msg.classList.add("ok");
+    toast(`SFZ 导入 ${j.data.count} 条`,"ok");
+    regbotRefreshStats();
+  }catch(e){
+    msg.textContent = "❌ " + String(e.message||e);
+    msg.classList.add("err");
+    toast(String(e.message||e),"err");
+  }
+}
+async function regbotUploadProxy(){
+  const f = document.getElementById("rb-proxy-file");
+  const msg = document.getElementById("rb-proxy-msg");
+  if(!f.files || f.files.length===0){ toast("请先选择代理文件","err"); return; }
+  msg.textContent = "上传中…";
+  msg.classList.remove("ok","err");
+  const fd = new FormData();
+  fd.append("proxy_file", f.files[0]);
+  try{
+    const r = await fetch(API + "/batch/proxy/upload", {method:"POST", body: fd});
+    const j = await r.json();
+    if(!j.ok) throw new Error(j.msg || "上传失败");
+    msg.textContent = `✅ 代理导入成功，共 ${j.data.count||0} 条`;
+    msg.classList.add("ok");
+    toast(`代理导入 ${j.data.count} 条`,"ok");
+    regbotRefreshStats();
+  }catch(e){
+    msg.textContent = "❌ " + String(e.message||e);
+    msg.classList.add("err");
+    toast(String(e.message||e),"err");
+  }
+}
+function regbotSetExportEnabled(v){
+  ["rb-export-csv","rb-export-txt","rb-export-sauth","rb-export-json"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.disabled = !v;
+  });
+}
+function regbotRenderSummary(data){
+  const box = document.getElementById("rb-summary");
+  if(!box) return;
+  const stats = (data && data.stats) || {};
+  const total = (data && data.total) || 0;
+  const succ = (data && data.success) || 0;
+  const fail = (data && data.failed) || 0;
+  const chips = [
+    {label:"总数", v:total, c:""},
+    {label:"成功", v:succ, c:"ok"},
+    {label:"失败", v:fail, c:"err"},
+    {label:"SFZ受限", v:stats.sfz_limit||0, c:""},
+    {label:"用户已存在", v:stats.username_exist||0, c:""},
+    {label:"验证码失败", v:stats.captcha_fail||0, c:""},
+    {label:"风控拦截", v:stats.risk_control||0, c:"warn"},
+  ];
+  box.innerHTML = chips.map(c=>`<div class="chip ${c.c}"><b>${c.v}</b> ${c.label}</div>`).join("");
+}
+function regbotStatusClass(s){
+  switch(s){
+    case "success": return "ok";
+    case "sfz_limit":
+    case "sfz_freq":
+    case "realname_error": return "warn";
+    case "captcha_fail":
+    case "username_exist":
+    case "risk_control": return "warn";
+    default: return "err";
+  }
+}
+function regbotRenderResults(results){
+  const box = document.getElementById("rb-results");
+  if(!box) return;
+  box.innerHTML = "";
+  if(!results || results.length===0){
+    box.innerHTML = `<div class="hint" style="text-align:center;padding:20px 0">暂无结果，点击上方「开始批量注册」启动任务。</div>`;
+    return;
+  }
+  results.forEach(r=>{
+    const row = document.createElement("div");
+    row.className = "regbot-result-row " + regbotStatusClass(r.status);
+    const statusIcon = r.status==="success" ? "✅" : r.status==="risk_control" ? "🛡" : r.status==="username_exist" ? "🔁" : r.status==="sfz_limit" ? "🪪" : r.status==="captcha_fail" ? "🔍" : "❌";
+    const meta = document.createElement("div");
+    meta.className = "regbot-result-meta";
+    const header = document.createElement("div");
+    header.className = "regbot-result-head";
+    header.innerHTML = `<span class="regbot-result-idx">#${r.index+1}</span>
+      <span class="regbot-result-user mono">${r.username||""}</span>
+      <span class="regbot-result-status status-${r.status||'error'}">${statusIcon} ${r.DisplayMsg || r.msg || r.status || ""}</span>`;
+    const detail = document.createElement("div");
+    detail.className = "regbot-result-detail";
+    detail.innerHTML = `<span>pwd: <span class="mono">${r.password||""}</span></span>
+      <span>昵称: ${r.nickname||""}</span>
+      <span>实名: ${r.sfz_name||""} ${(r.sfz_number||"").slice(0,6)}****</span>
+      ${r.proxy_used?`<span>代理: ${r.proxy_used}</span>`:""}
+      ${r.sauth_len?`<span>SAuth: ${r.sauth_len}b</span>`:""}`;
+    meta.appendChild(header);
+    meta.appendChild(detail);
+    const actions = document.createElement("div");
+    actions.className = "regbot-result-actions";
+    if(r.status==="success" && r.sauth_cookie){
+      const b1 = document.createElement("button");
+      b1.className = "ghost small";
+      b1.textContent = "🎫 SAuth";
+      b1.addEventListener("click", ()=>{
+        navigator.clipboard.writeText(r.sauth_cookie).then(()=>toast("SAuth 已复制","ok"));
+      });
+      actions.appendChild(b1);
+    }
+    if(r.username && r.password){
+      const b2 = document.createElement("button");
+      b2.className = "ghost small";
+      b2.textContent = "📋 账号";
+      b2.addEventListener("click", ()=>{
+        navigator.clipboard.writeText(r.username+"----"+r.password).then(()=>toast("账号密码已复制","ok"));
+      });
+      actions.appendChild(b2);
+    }
+    row.appendChild(meta);
+    row.appendChild(actions);
+    box.appendChild(row);
+  });
+}
+async function regbotStart(){
+  const count = parseInt(document.getElementById("rb-count").value)||0;
+  const conc = parseInt(document.getElementById("rb-concurrency").value)||1;
+  const uprefix = document.getElementById("rb-uprefix").value;
+  const nprefix = document.getElementById("rb-nprefix").value;
+  const password = document.getElementById("rb-password").value;
+  const delay = parseInt(document.getElementById("rb-delay").value)||0;
+  const useDirect = document.getElementById("rb-use-direct").checked;
+  const genSauth = document.getElementById("rb-gen-sauth").checked;
+  const useProxy = document.getElementById("rb-use-proxy").checked;
+
+  if(count<=0){ toast("注册数量需 ≥1","err"); return; }
+  regbotLastResults = [];
+  regbotSetExportEnabled(false);
+
+  const progress = document.getElementById("rb-progress");
+  progress.classList.remove("hidden");
+  document.getElementById("rb-progress-fill").style.width = "2%";
+  document.getElementById("rb-progress-text").textContent = `注册中… 0 / ${count}`;
+  setMsg("rb-msg", `批量注册中（${count} 个，并发 ${conc}）…`, "");
+  document.getElementById("rb-start").disabled = true;
+  document.getElementById("rb-stop").disabled = false;
+
+  regbotAbortCtrl = new AbortController();
+  try{
+    const r = await fetch(API + "/batch/register", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        count, concurrency:conc,
+        username_prefix:uprefix, nickname_prefix:nprefix,
+        password, delay_sec:delay,
+        use_direct:useDirect, gen_sauth:genSauth,
+        use_proxy_per_task:useProxy,
+      }),
+      signal: regbotAbortCtrl.signal,
+    });
+    const j = await r.json();
+    if(!j.ok) throw new Error(j.msg || ("HTTP "+r.status));
+    const d = j.data;
+    regbotLastResults = d.results || [];
+    regbotRenderSummary(d);
+    regbotRenderResults(regbotLastResults);
+    document.getElementById("rb-progress-fill").style.width = "100%";
+    document.getElementById("rb-progress-text").textContent = `完成 ${d.success||0} / ${d.total||count}`;
+    setMsg("rb-msg", `完成：成功 ${d.success||0} / ${d.total||count}`, (d.success==d.total?"ok":"err"));
+    regbotSetExportEnabled(true);
+    toast(`批量注册完成：${d.success||0}/${d.total||count}`, (d.success==d.total?"ok":"err"));
+  }catch(e){
+    if(e && e.name === "AbortError"){
+      setMsg("rb-msg", "已停止", "err");
+      toast("任务已停止");
+    } else {
+      setMsg("rb-msg", String(e.message||e), "err");
+      toast(String(e.message||e),"err");
+    }
+  }finally{
+    document.getElementById("rb-start").disabled = false;
+    document.getElementById("rb-stop").disabled = true;
+    regbotAbortCtrl = null;
+  }
+}
+function regbotStop(){
+  if(regbotAbortCtrl){
+    regbotAbortCtrl.abort();
+  }
+}
+function regbotDownloadBlob(blob, filename){
+  const a = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{a.remove(); URL.revokeObjectURL(url);}, 0);
+}
+async function regbotExport(fmt){
+  if(regbotLastResults.length===0){ toast("没有可导出的结果","err"); return; }
+  const onlyOk = document.getElementById("rb-success-only").checked;
+  const payload = {results: regbotLastResults, format: fmt, success_only: onlyOk};
+  const btn = {
+    csv: ["funauth_batch_register.csv", "text/csv"],
+    txt_accounts: ["funauth_accounts.txt", "text/plain"],
+    txt_sauth: ["funauth_sauth.txt", "text/plain"],
+    json: ["funauth_results.json", "application/json"],
+  }[fmt] || ["export.txt","text/plain"];
+  try{
+    const r = await fetch(API + "/batch/register/export", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
+    });
+    if(fmt==="json"){
+      const j = await r.json();
+      const blob = new Blob([JSON.stringify(j, null, 2)], {type:"application/json"});
+      regbotDownloadBlob(blob, btn[0]);
+    } else {
+      const blob = await r.blob();
+      regbotDownloadBlob(blob, btn[0]);
+    }
+    toast("已导出: "+btn[0],"ok");
+  }catch(e){
+    toast(String(e.message||e),"err");
+  }
+}
+
 // ---------- tabs ----------
 function switchTab(id){
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===id));
   document.querySelectorAll(".tab-panel").forEach(p=>p.classList.toggle("active", p.id===id));
   localStorage.setItem("bunker_tab", id);
+  if(id === "tab-regbot") regbotRefreshStats();
 }
 document.addEventListener("click", (e)=>{
   const t = e.target.closest(".tab");
@@ -472,6 +728,19 @@ function regFill(){
   toast("已回填到登录认证页面","ok");
 }
 document.addEventListener("DOMContentLoaded", ()=>{
+  // regbot (批量注册机)
+  document.getElementById("rb-upload-sfz")?.addEventListener("click", regbotUploadSFZ);
+  document.getElementById("rb-upload-proxy")?.addEventListener("click", regbotUploadProxy);
+  document.getElementById("rb-start")?.addEventListener("click", regbotStart);
+  document.getElementById("rb-stop")?.addEventListener("click", regbotStop);
+  document.getElementById("rb-export-csv")?.addEventListener("click", ()=>regbotExport("csv"));
+  document.getElementById("rb-export-txt")?.addEventListener("click", ()=>regbotExport("txt_accounts"));
+  document.getElementById("rb-export-sauth")?.addEventListener("click", ()=>regbotExport("txt_sauth"));
+  document.getElementById("rb-export-json")?.addEventListener("click", ()=>regbotExport("json"));
+  // 初始化结果展示 & 统计
+  regbotRenderResults([]);
+  regbotRefreshStats();
+
   // register
   $("#btn-reg-preset").addEventListener("click", regPreset);
   $("#btn-reg-preset2").addEventListener("click", regPreset);
