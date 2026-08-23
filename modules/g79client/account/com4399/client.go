@@ -177,8 +177,16 @@ type Device struct {
 type LoginOptions struct {
 	Captcha   string
 	CaptchaID string
-	Retry     int
+	Retry     int // 验证码相关重试（上限 2）
+	// PleaseWaitRetry 用于"请稍后再试"类风控重试，独立于验证码重试
+	// 上限由 loginMaxPleaseWaitRetries 控制，不占 Retry 名额
+	PleaseWaitRetry int
 }
+
+const (
+	loginMaxPleaseWaitRetries  = 5
+	loginPleaseWaitRetryDelay  = 5 * time.Second
+)
 
 // LoginWithPassword 使用设备凭据登录 4399。
 func (d *Device) LoginWithPassword(ctx context.Context, username, password string) (*User, error) {
@@ -238,6 +246,21 @@ func (d *Device) LoginWithPasswordOptions(ctx context.Context, username, passwor
 		}
 		if message == "" {
 			message = preview(html)
+		}
+		// ---------- 请稍后再试 自动重试 ----------
+		if isLoginPleaseWait(message, html) && options.PleaseWaitRetry < loginMaxPleaseWaitRetries {
+			log.Printf("[4399登录] 请稍后再试 第%d/%d次，等待%v后重新登录… (msg=%q)",
+				options.PleaseWaitRetry+1, loginMaxPleaseWaitRetries, loginPleaseWaitRetryDelay, message)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(loginPleaseWaitRetryDelay):
+			}
+			options.PleaseWaitRetry++
+			// 清空 captcha，避免旧 captcha 干扰；重新 requestState 拿新 state/deviceId
+			options.Captcha = ""
+			options.CaptchaID = ""
+			return d.LoginWithPasswordOptions(ctx, username, password, options)
 		}
 		// 添加调试输出
 		log.Printf("[DEBUG] 登录失败,响应状态码: %d", 200)
@@ -468,6 +491,20 @@ func isAccountNotFoundPage(rawHTML, message string) bool {
 		strings.Contains(content, "register-form") ||
 		strings.Contains(content, "没有账号") ||
 		strings.Contains(content, "注册") && strings.Contains(content, "账号") && strings.Contains(content, "密码")
+}
+
+// isLoginPleaseWait 判断登录响应是否为风控"请稍后再试"（需要延时重试，而非账号错误）
+func isLoginPleaseWait(message, html string) bool {
+	if message == "" {
+		return false
+	}
+	content := strings.ToLower(message + "\n" + html)
+	return strings.Contains(content, "请稍后再试") ||
+		strings.Contains(content, "please wait") ||
+		strings.Contains(content, "status=202") ||
+		strings.Contains(content, "操作太频繁") ||
+		strings.Contains(content, "风控") ||
+		strings.Contains(content, "异常") && strings.Contains(content, "稍后")
 }
 
 func generateIdentifier() string {

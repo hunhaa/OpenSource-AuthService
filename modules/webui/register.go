@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strings"
@@ -149,14 +150,40 @@ func HandleRegisterCom4399(c *gin.Context) {
 			}
 		}
 
-		// 4399 注册/实名提交后需要同步延时
-		time.Sleep(3 * time.Second)
+		// 4399 注册/实名提交后需要同步延时（3s 太短，被风控概率高，提高到 5s）
+		time.Sleep(5 * time.Second)
 	}
 
 	// 3. 登录 → 生成 G79 可用 Cookie JSON
-	cookie, err := account4399.LoginCookieWithPassword(ctx, req.Username, req.Password)
-	if err != nil {
-		fail(c, 502, "4399 登录获取 Sauth 失败: %v", err)
+	// 底层 LoginWithPasswordOptions 已有"请稍后再试"重试，这里再加一层兜底
+	// （应对底层未覆盖到的其他"请稍后再试"错误）
+	var cookie string
+	var loginErr error
+	const loginOuterRetries = 3
+	for attempt := 0; attempt < loginOuterRetries; attempt++ {
+		cookie, loginErr = account4399.LoginCookieWithPassword(ctx, req.Username, req.Password)
+		if loginErr == nil {
+			break
+		}
+		msg := strings.ToLower(loginErr.Error())
+		if !strings.Contains(msg, "请稍后再试") &&
+			!strings.Contains(msg, "please wait") &&
+			!strings.Contains(msg, "操作太频繁") &&
+			!strings.Contains(msg, "稍后再试") {
+			break
+		}
+		if attempt < loginOuterRetries-1 {
+			log.Printf("[4399] 登录阶段请稍后再试（外层重试 %d/%d），等待6s…: %v", attempt+1, loginOuterRetries, loginErr)
+			select {
+			case <-ctx.Done():
+				loginErr = ctx.Err()
+				break
+			case <-time.After(6 * time.Second):
+			}
+		}
+	}
+	if loginErr != nil {
+		fail(c, 502, "4399 登录获取 Sauth 失败: %v", loginErr)
 		return
 	}
 	result["cookie"] = cookie
