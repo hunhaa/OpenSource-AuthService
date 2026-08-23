@@ -110,3 +110,24 @@ input.mono.big{
 }
 button.small{font-size:12px;padding:7px 12px}
 .hint.small{font-size:12px;line-height:1.75}
+
+/* ===== Batch Panel ===== */
+.batch-list{display:flex;flex-direction:column;gap:14px}
+.batch-row{background:#0c1220;border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px}
+.batch-row-header{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.batch-row-header .batch-idx{font-size:12px;color:var(--sub);font-weight:700;min-width:28px}
+.batch-row-header .batch-del{background:transparent;border:none;color:var(--danger);cursor:pointer;font-size:16px;padding:4px 8px;border-radius:6px}
+.batch-row-header .batch-del:hover{background:rgba(255,107,107,.12)}
+.batch-row .batch-cookie{min-height:60px}
+.batch-row .batch-nick{max-width:300px}
+.batch-status{font-size:12px;font-family:ui-monospace,monospace}
+.batch-status.ok{color:var(--ok)}
+.batch-status.err{color:var(--danger)}
+#batch-enter-result,#batch-authv2-result{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+.batch-res-row{background:#0c1220;border:1px solid var(--line);border-radius:10px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.batch-res-row.ok{border-left:3px solid var(--ok)}
+.batch-res-row.err{border-left:3px solid var(--danger)}
+.batch-res-meta{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.batch-res-name{font-weight:700;font-size:13px}
+.batch-res-detail{color:var(--sub);font-size:12px;font-family:ui-monospace,monospace;word-break:break-all}
+.batch-res-actions{display:flex;gap:6px;flex-shrink:0}

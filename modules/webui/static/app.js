@@ -242,6 +242,178 @@ async function doAuthV2(){
   }
 }
 
+// ---------- batch flow ----------
+let batchTokens = []; // 批量进入成功后的 token 列表
+
+function batchAddRow(cookie="", nick=""){
+  const list = $("#batch-list");
+  const idx = list.children.length;
+  const row = document.createElement("div");
+  row.className = "batch-row";
+  row.innerHTML = `
+    <div class="batch-row-header">
+      <span class="batch-idx">#${idx+1}</span>
+      <button class="batch-del" title="删除此行">✕</button>
+    </div>
+    <textarea class="batch-cookie" placeholder='粘贴 SAuth Cookie' rows="3"></textarea>
+    <input class="batch-nick" type="text" placeholder="昵称（留空不改）">
+    <div class="batch-status"></div>
+  `;
+  row.querySelector(".batch-cookie").value = cookie;
+  row.querySelector(".batch-nick").value = nick;
+  row.querySelector(".batch-del").addEventListener("click", ()=>{
+    row.remove();
+    batchReindex();
+  });
+  list.appendChild(row);
+}
+function batchReindex(){
+  const rows = document.querySelectorAll("#batch-list .batch-row");
+  rows.forEach((r, i)=>{
+    r.querySelector(".batch-idx").textContent = "#"+(i+1);
+  });
+}
+function batchCollect(){
+  const rows = document.querySelectorAll("#batch-list .batch-row");
+  const accounts = [];
+  rows.forEach(r=>{
+    const cookie = r.querySelector(".batch-cookie").value.trim();
+    const nick = r.querySelector(".batch-nick").value.trim();
+    if(cookie) accounts.push({cookie, nickname:nick});
+  });
+  return accounts;
+}
+function batchSetStatus(row, text, kind=""){
+  const el = row.querySelector(".batch-status");
+  if(!el) return;
+  el.textContent = text;
+  el.className = "batch-status " + kind;
+}
+function renderBatchEnterResult(data){
+  const box = $("#batch-enter-result");
+  box.innerHTML = "";
+  batchTokens = [];
+  (data.results||[]).forEach(r=>{
+    const row = document.createElement("div");
+    row.className = "batch-res-row " + (r.status==="ok"?"ok":"err");
+    const meta = document.createElement("div");
+    meta.className = "batch-res-meta";
+    const name = document.createElement("div");
+    name.className = "batch-res-name";
+    name.textContent = `#${r.index+1} ${r.nickname||r.user_id||""} ${r.status==="ok"?"✅":"❌"}`;
+    const detail = document.createElement("div");
+    detail.className = "batch-res-detail";
+    if(r.status==="ok"){
+      detail.textContent = `uid=${r.user_id} ip=${r.ip||"-"} token=${r.token?r.token.slice(0,12)+"…":"-"}`;
+      if(r.token) batchTokens.push(r.token);
+    } else {
+      detail.textContent = r.error || "未知错误";
+    }
+    meta.appendChild(name);
+    meta.appendChild(detail);
+    row.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "batch-res-actions";
+    if(r.status==="ok" && r.token){
+      const btn = document.createElement("button");
+      btn.className = "ghost small";
+      btn.textContent = "📋 复制Token";
+      btn.addEventListener("click", ()=>{
+        navigator.clipboard.writeText(r.token).then(()=>toast("Token 已复制","ok"));
+      });
+      actions.appendChild(btn);
+    }
+    row.appendChild(actions);
+    box.appendChild(row);
+  });
+  // 汇总
+  const summary = document.createElement("div");
+  summary.className = "batch-res-row";
+  summary.innerHTML = `<div class="batch-res-meta"><div class="batch-res-name">汇总</div>
+    <div class="batch-res-detail">共 ${data.total} 个 · 成功 ${data.ok_count} · 失败 ${data.fail_count}</div></div>`;
+  box.appendChild(summary);
+}
+function renderBatchAuthV2Result(data){
+  const box = $("#batch-authv2-result");
+  box.innerHTML = "";
+  (data.results||[]).forEach(r=>{
+    const row = document.createElement("div");
+    row.className = "batch-res-row " + (r.status==="ok"?"ok":"err");
+    const meta = document.createElement("div");
+    meta.className = "batch-res-meta";
+    const name = document.createElement("div");
+    name.className = "batch-res-name";
+    name.textContent = `#${r.index+1} ${r.nickname||""} ${r.status==="ok"?"✅":"❌"}`;
+    const detail = document.createElement("div");
+    detail.className = "batch-res-detail";
+    if(r.status==="ok"){
+      detail.textContent = `${r.variant||""} len=${r.chain_info_len} b64=${(r.chain_info_b64||"").slice(0,60)}…`;
+    } else {
+      detail.textContent = r.error || "未知错误";
+    }
+    meta.appendChild(name);
+    meta.appendChild(detail);
+    row.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "batch-res-actions";
+    if(r.status==="ok" && r.chain_info_b64){
+      const btn = document.createElement("button");
+      btn.className = "ghost small";
+      btn.textContent = "📋 复制B64";
+      btn.addEventListener("click", ()=>{
+        navigator.clipboard.writeText(r.chain_info_b64).then(()=>toast("ChainInfo B64 已复制","ok"));
+      });
+      actions.appendChild(btn);
+    }
+    row.appendChild(actions);
+    box.appendChild(row);
+  });
+  // 汇总
+  const summary = document.createElement("div");
+  summary.className = "batch-res-row";
+  summary.innerHTML = `<div class="batch-res-meta"><div class="batch-res-name">汇总</div>
+    <div class="batch-res-detail">共 ${data.total} 个 · 成功 ${data.ok_count} · 失败 ${data.fail_count}</div></div>`;
+  box.appendChild(summary);
+}
+async function doBatchEnter(){
+  const accounts = batchCollect();
+  if(accounts.length===0){ toast("请至少添加一个有效 Cookie","err"); return; }
+  const sid = $("#batch-server-id").value.trim();
+  if(!sid){ toast("请填写服务器号","err"); return; }
+  const pwd = $("#batch-server-pwd").value;
+  setMsg("batch-enter-msg", `正在批量进入 ${accounts.length} 个账号…（每个约 5-10 秒）`, "");
+  $("#btn-batch-enter").disabled = true;
+  try{
+    const d = await call("/batch/enter", {accounts, server_id:sid, password:pwd});
+    renderBatchEnterResult(d);
+    setMsg("batch-enter-msg", `完成：成功 ${d.ok_count}/${d.total}`, d.ok_count===d.total?"ok":"err");
+    toast(`批量进入完成：${d.ok_count}/${d.total}`, d.ok_count===d.total?"ok":"err");
+  }catch(e){
+    setMsg("batch-enter-msg", String(e.message||e), "err");
+    toast(String(e.message||e),"err");
+  }finally{
+    $("#btn-batch-enter").disabled = false;
+  }
+}
+async function doBatchAuthV2(){
+  if(batchTokens.length===0){ toast("请先完成批量进入","err"); return; }
+  const sid = $("#batch-server-id").value.trim();
+  if(!sid){ toast("请填写服务器号","err"); return; }
+  setMsg("batch-authv2-msg", `正在批量生成 AuthV2（${batchTokens.length} 个）…`, "");
+  $("#btn-batch-authv2").disabled = true;
+  try{
+    const d = await call("/batch/authv2", {tokens:batchTokens, server_id:sid});
+    renderBatchAuthV2Result(d);
+    setMsg("batch-authv2-msg", `完成：成功 ${d.ok_count}/${d.total}`, d.ok_count===d.total?"ok":"err");
+    toast(`批量AuthV2完成：${d.ok_count}/${d.total}`, d.ok_count===d.total?"ok":"err");
+  }catch(e){
+    setMsg("batch-authv2-msg", String(e.message||e), "err");
+    toast(String(e.message||e),"err");
+  }finally{
+    $("#btn-batch-authv2").disabled = false;
+  }
+}
+
 // ---------- tabs ----------
 function switchTab(id){
   document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===id));
@@ -320,6 +492,16 @@ document.addEventListener("DOMContentLoaded", ()=>{
   $("#btn-search").addEventListener("click", doSearch);
   $("#btn-enter").addEventListener("click", doEnter);
   $("#btn-authv2").addEventListener("click", doAuthV2);
+
+  // batch
+  batchAddRow();
+  $("#btn-batch-add").addEventListener("click", ()=>batchAddRow());
+  $("#btn-batch-clear").addEventListener("click", ()=>{
+    $("#batch-list").innerHTML = "";
+    batchAddRow();
+  });
+  $("#btn-batch-enter").addEventListener("click", doBatchEnter);
+  $("#btn-batch-authv2").addEventListener("click", doBatchAuthV2);
 
   // restore tab & token persistence
   const savedTab = localStorage.getItem("bunker_tab") || "tab-auth";

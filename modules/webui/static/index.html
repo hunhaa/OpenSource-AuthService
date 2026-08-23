@@ -13,6 +13,7 @@
     <span class="title">BUNKER<small>WEB</small></span>
     <nav class="tabs">
       <button class="tab active" data-tab="tab-auth">登录认证</button>
+      <button class="tab" data-tab="tab-batch">塞入</button>
       <button class="tab" data-tab="tab-register">账号注册</button>
     </nav>
   </div>
@@ -145,6 +146,46 @@
     <div id="authv2-result"></div>
   </section>
   </section><!-- /tab-auth -->
+
+  <!-- Batch Panel: 批量塞入 -->
+  <section id="tab-batch" class="tab-panel">
+    <section class="card">
+      <h2><span class="step">1</span> 批量塞入辅助账号</h2>
+      <p class="hint">输入多个 <code>SAuth Cookie</code>，每个下方填写昵称（留空则不改昵称）。全部填完后在底部统一输入服务器号并点击「批量进入」，系统会自动为每个账号执行 认证 → 设昵称 → Link+GameStart → 进入租赁服。</p>
+      <div id="batch-list" class="batch-list">
+        <!-- 动态生成 -->
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btn-batch-add" class="ghost">➕ 添加一行</button>
+        <button id="btn-batch-clear" class="ghost">🗑️ 清空全部</button>
+      </div>
+      <div class="grid-2" style="margin-top:18px">
+        <div>
+          <label>服务器号（统一）</label>
+          <input id="batch-server-id" type="text" placeholder="例如 52258662">
+        </div>
+        <div>
+          <label>服务器密码（可选，统一）</label>
+          <input id="batch-server-pwd" type="text" placeholder="无密码留空">
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button id="btn-batch-enter" class="primary">🚀 批量进入</button>
+        <span id="batch-enter-msg" class="msg"></span>
+      </div>
+      <div id="batch-enter-result"></div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">2</span> 批量生成 AuthV2 (ChainInfo)</h2>
+      <p class="hint">对上方已成功进入的账号，统一生成 <code>ChainInfo</code>。需要先完成上一步的批量进入。</p>
+      <div class="row" style="margin-top:16px">
+        <button id="btn-batch-authv2" class="primary">🔑 批量 AuthV2</button>
+        <span id="batch-authv2-msg" class="msg"></span>
+      </div>
+      <div id="batch-authv2-result"></div>
+    </section>
+  </section><!-- /tab-batch -->
 </main>
 
 <footer>

@@ -158,6 +158,10 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		g.POST("/rental/authv2", HandleRentalAuthV2)
 		g.POST("/logout", HandleLogout)
 
+		// 批量塞入
+		g.POST("/batch/enter", HandleBatchEnter)
+		g.POST("/batch/authv2", HandleBatchAuthV2)
+
 		// 注册 (Bunker 风格)
 		RegisterRegisterRoutes(g)
 	}

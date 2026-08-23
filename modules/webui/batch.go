@@ -43,13 +43,13 @@ type BatchEnterResult struct {
 }
 
 type BatchAuthV2Result struct {
-	Index       int    `json:"index"`
-	Nickname    string `json:"nickname"`
-	Status      string `json:"status"` // "ok" / "error"`
-	ChainLen    int    `json:"chain_info_len,omitempty"`
-	ChainB64    string `json:"chain_info_b64,omitempty"`
-	Variant     string `json:"variant,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Index    int    `json:"index"`
+	Nickname string `json:"nickname"`
+	Status   string `json:"status"` // "ok" / "error"
+	ChainLen int    `json:"chain_info_len,omitempty"`
+	ChainB64 string `json:"chain_info_b64,omitempty"`
+	Variant  string `json:"variant,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // normalizeCookie 规范化 cookie 格式，兼容原始 sauth_json 字符串
@@ -116,7 +116,6 @@ func HandleBatchEnter(c *gin.Context) {
 		// 2. 设置昵称（如果提供了自定义昵称）
 		nickname := strings.TrimSpace(acc.Nickname)
 		if nickname != "" {
-			// 先取当前昵称，如果和目标一样就不调用
 			curNick := ""
 			if cli.UserDetail != nil {
 				curNick = cli.UserDetail.Name
@@ -134,7 +133,7 @@ func HandleBatchEnter(c *gin.Context) {
 				curNick = cli.UserDetail.Name
 			}
 			if strings.TrimSpace(curNick) == "" {
-				_ = g79EnsureNickname(cli, "NKLM")
+				_ = g79client.EnsureNicknameNKLMIfEmpty(cli, "NKLM")
 				if cli.UserDetail != nil {
 					nickname = cli.UserDetail.Name
 					r.Nickname = nickname
@@ -210,7 +209,6 @@ func HandleBatchEnter(c *gin.Context) {
 		e := resp.Entity
 		r.IP = fmt.Sprintf("%s:%v", e.McserverHost, e.McserverPort.String())
 		r.Status = "ok"
-		// 清理非空 error 前缀（昵称警告保留但 status=ok）
 		if r.Error != "" {
 			r.Error = strings.TrimSpace(r.Error)
 		}
@@ -224,11 +222,11 @@ func HandleBatchEnter(c *gin.Context) {
 		}
 	}
 	ok(c, gin.H{
-		"results":   results,
-		"total":     len(results),
-		"ok_count":  okCount,
+		"results":    results,
+		"total":      len(results),
+		"ok_count":   okCount,
 		"fail_count": len(results) - okCount,
-		"server_id": req.ServerID,
+		"server_id":  req.ServerID,
 	})
 }
 
@@ -289,6 +287,7 @@ func HandleBatchAuthV2(c *gin.Context) {
 		}
 
 		var lastErr error
+		success := false
 		for _, v := range variants {
 			data, gerr := v.gen()
 			if gerr != nil {
@@ -301,14 +300,15 @@ func HandleBatchAuthV2(c *gin.Context) {
 				r.ChainLen = len(chainInfo)
 				r.ChainB64 = encodeB64(chainInfo)
 				r.Variant = v.name
-				results[i] = r
-				goto next
+				success = true
+				break
 			}
 			lastErr = fmt.Errorf("[%s] %w", v.name, aerr)
 		}
-		r.Status = "error"
-		r.Error = fmt.Sprintf("%v", lastErr)
-	next:
+		if !success {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("%v", lastErr)
+		}
 		results[i] = r
 	}
 
@@ -319,10 +319,10 @@ func HandleBatchAuthV2(c *gin.Context) {
 		}
 	}
 	ok(c, gin.H{
-		"results":   results,
-		"total":     len(results),
-		"ok_count":  okCount,
+		"results":    results,
+		"total":      len(results),
+		"ok_count":   okCount,
 		"fail_count": len(results) - okCount,
-		"server_id": req.ServerID,
+		"server_id":  req.ServerID,
 	})
 }
