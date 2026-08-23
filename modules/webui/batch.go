@@ -1,0 +1,328 @@
+package webui
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Yeah114/g79client"
+	linkconnection "github.com/Yeah114/g79client/service/link_connection"
+	"github.com/gin-gonic/gin"
+)
+
+// ---------- 请求结构体 ----------
+
+type BatchAccount struct {
+	Cookie   string `json:"cookie"`
+	Nickname string `json:"nickname"`
+}
+
+type BatchEnterReq struct {
+	Accounts []BatchAccount `json:"accounts"`
+	ServerID string         `json:"server_id"`
+	Password string         `json:"password"`
+}
+
+type BatchAuthV2Req struct {
+	Tokens   []string `json:"tokens"`
+	ServerID string   `json:"server_id"`
+}
+
+// ---------- 响应结构体 ----------
+
+type BatchEnterResult struct {
+	Index    int    `json:"index"`
+	Nickname string `json:"nickname"`
+	UserID   string `json:"user_id"`
+	Token    string `json:"token"`
+	Status   string `json:"status"` // "ok" / "error"
+	IP       string `json:"ip,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+type BatchAuthV2Result struct {
+	Index       int    `json:"index"`
+	Nickname    string `json:"nickname"`
+	Status      string `json:"status"` // "ok" / "error"`
+	ChainLen    int    `json:"chain_info_len,omitempty"`
+	ChainB64    string `json:"chain_info_b64,omitempty"`
+	Variant     string `json:"variant,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// normalizeCookie 规范化 cookie 格式，兼容原始 sauth_json 字符串
+func normalizeCookie(cookie string) string {
+	cookie = strings.TrimSpace(cookie)
+	if cookie == "" {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(cookie), &m) != nil {
+		wrapped, _ := json.Marshal(map[string]string{"sauth_json": cookie})
+		return string(wrapped)
+	} else if _, has := m["sauth_json"]; !has {
+		wrapped, _ := json.Marshal(map[string]string{"sauth_json": cookie})
+		return string(wrapped)
+	}
+	return cookie
+}
+
+// HandleBatchEnter 批量认证+Link+进入租赁服
+// 对每个 cookie 依次执行：认证 → 设置昵称 → Link+GameStart → EnterRentalServerWorld
+func HandleBatchEnter(c *gin.Context) {
+	var req BatchEnterReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, 400, "参数错误: %v", err)
+		return
+	}
+	if len(req.Accounts) == 0 {
+		fail(c, 400, "accounts 不能为空")
+		return
+	}
+	if req.ServerID == "" {
+		fail(c, 400, "server_id 不能为空")
+		return
+	}
+
+	results := make([]BatchEnterResult, len(req.Accounts))
+	for i, acc := range req.Accounts {
+		r := BatchEnterResult{Index: i, Nickname: acc.Nickname}
+		cookie := normalizeCookie(acc.Cookie)
+		if cookie == "" {
+			r.Status = "error"
+			r.Error = "cookie 为空"
+			results[i] = r
+			continue
+		}
+
+		// 1. 认证
+		cli, err := g79client.NewClient()
+		if err != nil {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("NewClient失败: %v", err)
+			results[i] = r
+			continue
+		}
+		if err := cli.G79AuthenticateWithCookie(cookie); err != nil {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("认证失败: %v", err)
+			results[i] = r
+			continue
+		}
+		r.UserID = cli.UserID
+
+		// 2. 设置昵称（如果提供了自定义昵称）
+		nickname := strings.TrimSpace(acc.Nickname)
+		if nickname != "" {
+			// 先取当前昵称，如果和目标一样就不调用
+			curNick := ""
+			if cli.UserDetail != nil {
+				curNick = cli.UserDetail.Name
+			}
+			if curNick != nickname {
+				if err := cli.UpdateNickname(nickname); err != nil {
+					// 昵称设置失败不中断流程，继续往下走
+					r.Error = fmt.Sprintf("昵称设置失败(忽略): %v; ", err)
+				}
+			}
+		} else {
+			// 没提供昵称但当前为空时自动补 NKLM 前缀
+			curNick := ""
+			if cli.UserDetail != nil {
+				curNick = cli.UserDetail.Name
+			}
+			if strings.TrimSpace(curNick) == "" {
+				_ = g79EnsureNickname(cli, "NKLM")
+				if cli.UserDetail != nil {
+					nickname = cli.UserDetail.Name
+					r.Nickname = nickname
+				}
+			}
+		}
+		if r.Nickname == "" && cli.UserDetail != nil {
+			r.Nickname = cli.UserDetail.Name
+		}
+
+		// 3. 创建会话
+		token := newToken()
+		s := &Session{
+			Token:     token,
+			Client:    cli,
+			CookieRaw: cookie,
+			Nickname:  r.Nickname,
+			UserID:    cli.UserID,
+			EngineVer: cli.EngineVersion,
+			PatchVer:  cli.G79LatestVersion,
+			CreatedAt: time.Now(),
+			ExpiresAt: time.Now().Add(sessionTTL),
+		}
+
+		// 4. Link + GameStart
+		svc, err := linkconnection.NewLinkConnectionService(cli)
+		if err != nil {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("%s创建Link服务失败: %v", r.Error, err)
+			results[i] = r
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		conn, err := svc.Dial(ctx)
+		if err != nil {
+			cancel()
+			r.Status = "error"
+			r.Error = fmt.Sprintf("%sLink连接失败: %v", r.Error, err)
+			results[i] = r
+			continue
+		}
+		if err := conn.SendGameStart(nil); err != nil {
+			cancel()
+			conn.Close()
+			r.Status = "error"
+			r.Error = fmt.Sprintf("%sSendGameStart失败: %v", r.Error, err)
+			results[i] = r
+			continue
+		}
+		cancel()
+		s.LinkConn = conn
+		s.LinkClose = func() {
+			defer func() { _ = recover() }()
+			conn.Close()
+		}
+		storeSession(s)
+		r.Token = token
+
+		// 5. EnterRentalServerWorld
+		resp, err := cli.EnterRentalServerWorld(req.ServerID, req.Password)
+		if err != nil {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("%sEnterRentalServerWorld失败: %v", r.Error, err)
+			results[i] = r
+			continue
+		}
+		if resp.Code != 0 {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("%s进入租赁服失败 code=%d msg=%s", r.Error, resp.Code, resp.Message)
+			results[i] = r
+			continue
+		}
+		e := resp.Entity
+		r.IP = fmt.Sprintf("%s:%v", e.McserverHost, e.McserverPort.String())
+		r.Status = "ok"
+		// 清理非空 error 前缀（昵称警告保留但 status=ok）
+		if r.Error != "" {
+			r.Error = strings.TrimSpace(r.Error)
+		}
+		results[i] = r
+	}
+
+	okCount := 0
+	for _, r := range results {
+		if r.Status == "ok" {
+			okCount++
+		}
+	}
+	ok(c, gin.H{
+		"results":   results,
+		"total":     len(results),
+		"ok_count":  okCount,
+		"fail_count": len(results) - okCount,
+		"server_id": req.ServerID,
+	})
+}
+
+// HandleBatchAuthV2 批量生成 AuthV2 ChainInfo
+// 对每个 token 依次执行：加载会话 → 检查Link → 生成AuthV2数据 → 发送请求
+func HandleBatchAuthV2(c *gin.Context) {
+	var req BatchAuthV2Req
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, 400, "参数错误: %v", err)
+		return
+	}
+	if len(req.Tokens) == 0 {
+		fail(c, 400, "tokens 不能为空")
+		return
+	}
+	if req.ServerID == "" {
+		fail(c, 400, "server_id 不能为空")
+		return
+	}
+
+	results := make([]BatchAuthV2Result, len(req.Tokens))
+	for i, tok := range req.Tokens {
+		r := BatchAuthV2Result{Index: i}
+		s, ok0 := loadSession(tok)
+		if !ok0 {
+			r.Status = "error"
+			r.Error = "会话不存在或已过期"
+			results[i] = r
+			continue
+		}
+		r.Nickname = s.Nickname
+
+		if s.LinkConn == nil {
+			r.Status = "error"
+			r.Error = "未启动Link连接"
+			results[i] = r
+			continue
+		}
+
+		// 依次尝试 PC 版和 PE 版
+		type variant struct {
+			name string
+			gen  func() ([]byte, error)
+		}
+		variants := []variant{
+			{
+				name: "PC版",
+				gen: func() ([]byte, error) {
+					return s.Client.GeneratePCRentalGameAuthV2(req.ServerID, clientPublicKey)
+				},
+			},
+			{
+				name: "PE版",
+				gen: func() ([]byte, error) {
+					return s.Client.GenerateRentalGameAuthV2(req.ServerID, clientPublicKey)
+				},
+			},
+		}
+
+		var lastErr error
+		for _, v := range variants {
+			data, gerr := v.gen()
+			if gerr != nil {
+				lastErr = fmt.Errorf("[%s] 生成失败: %w", v.name, gerr)
+				continue
+			}
+			chainInfo, aerr := s.Client.SendAuthV2Request(data)
+			if aerr == nil {
+				r.Status = "ok"
+				r.ChainLen = len(chainInfo)
+				r.ChainB64 = encodeB64(chainInfo)
+				r.Variant = v.name
+				results[i] = r
+				goto next
+			}
+			lastErr = fmt.Errorf("[%s] %w", v.name, aerr)
+		}
+		r.Status = "error"
+		r.Error = fmt.Sprintf("%v", lastErr)
+	next:
+		results[i] = r
+	}
+
+	okCount := 0
+	for _, r := range results {
+		if r.Status == "ok" {
+			okCount++
+		}
+	}
+	ok(c, gin.H{
+		"results":   results,
+		"total":     len(results),
+		"ok_count":  okCount,
+		"fail_count": len(results) - okCount,
+		"server_id": req.ServerID,
+	})
+}
