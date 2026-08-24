@@ -1,44 +1,43 @@
-/funauth
-proxy_cache/
-.vscode/
+```
+# Dependencies
+go.sum
 
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
+# Build artifacts
+*.o
+*.a
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Code coverage profiles and other test artifacts
+*.dll
+*.exe
 *.out
-coverage.*
-*.coverprofile
-profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Go build cache
+*.test
+*.prof
+cover.out
 
-# Go workspace file
-go.work
-go.work.sum
+# Vendor directory (if using vendor)
+vendor/
 
-# env file
+# Environment variables
 .env
+.env.local
+*.env.*
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
 
-bin/
-build.err
-build.out
-dist
-./huggingface_weights
-build
-.gocache
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+```
