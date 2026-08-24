@@ -529,10 +529,17 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 					item.SFZNumber = sfz.Number
 					continue
 				case e == account4399.ErrRiskControlTriggered:
+					// "请稍后再试"：90% 不是代理被封，而是 SFZ 频率过快 / 会话被风控
+					// 策略：换 SFZ + 换用户名 + 延长等待（8-12秒），不轻易标记代理为 dead
+					// 只有同一个代理连续 2 次触发 risk_control，才考虑换下一个
 					item.Status = "risk_control"
-					markProxyDead(item.ProxyUsed)
+					sfz = popRandomSFZ()
+					item.SFZName = sfz.Name
+					item.SFZNumber = sfz.Number
+					user = generateUsername(strings.TrimSpace(req.UsernamePrefix), idx*1000+attempt*17)
+					item.Username = user
 					if attempt < maxRetries-1 {
-						time.Sleep(5 * time.Second)
+						jitterSleepMs(9000 + attempt*1500)
 					}
 					continue
 				case errors.Is(e, account4399.ErrCaptchaEngineNotReady):
@@ -541,7 +548,7 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 				case e == account4399.ErrCaptchaFailed:
 					item.Status = "captcha_fail"
 					if attempt < maxRetries-1 {
-						time.Sleep(2 * time.Second)
+						jitterSleepMs(2000)
 					}
 					continue
 				case e == account4399.ErrInvalidRegisterInput:
@@ -549,16 +556,15 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 					return item
 				case e == account4399.ErrRegisterRejected:
 					item.Status = "error"
-					markProxyDead(item.ProxyUsed)
 					continue
 				default:
-					// 网络错误 / 代理超时 / 未知错误一律视为代理失效，换下一个
-					if e != nil {
+					// 只有纯网络错误（超时、连接被拒、EOF）才标记代理失效
+					if e != nil && isNetworkError(e) {
 						markProxyDead(item.ProxyUsed)
 					}
 				}
 				if attempt < maxRetries-1 {
-					time.Sleep(2 * time.Second)
+					jitterSleepMs(3000)
 				}
 				continue
 			}
@@ -591,23 +597,28 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 			case err == account4399.ErrCaptchaFailed:
 				item.Status = "captcha_fail"
 				if attempt < maxRetries-1 {
-					time.Sleep(2 * time.Second)
+					jitterSleepMs(2000)
 				}
 				continue
 			case err == account4399.ErrRiskControlTriggered:
+				// "请稍后再试"：换 SFZ + 换用户名 + 延长等待
 				item.Status = "risk_control"
-				markProxyDead(item.ProxyUsed)
+				sfz = popRandomSFZ()
+				item.SFZName = sfz.Name
+				item.SFZNumber = sfz.Number
+				user = generateUsername(strings.TrimSpace(req.UsernamePrefix), idx*1000+attempt*17)
+				item.Username = user
 				if attempt < maxRetries-1 {
-					time.Sleep(5 * time.Second)
+					jitterSleepMs(9000 + attempt*1500)
 				}
 				continue
 			default:
-				if err != nil {
+				if err != nil && isNetworkError(err) {
 					markProxyDead(item.ProxyUsed)
 				}
 			}
 			if attempt < maxRetries-1 {
-				time.Sleep(2 * time.Second)
+				jitterSleepMs(3000)
 			}
 			continue
 		}
@@ -659,20 +670,56 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 			item.SFZNumber = sfz.Number
 			continue
 		case strings.Contains(em, "风控"), strings.Contains(em, "稍后再试"):
+			// "请稍后再试"：换 SFZ + 换用户名 + 延长等待
 			item.Status = "risk_control"
-			markProxyDead(item.ProxyUsed)
+			sfz = popRandomSFZ()
+			item.SFZName = sfz.Name
+			item.SFZNumber = sfz.Number
+			user = generateUsername(strings.TrimSpace(req.UsernamePrefix), idx*1000+attempt*17)
+			item.Username = user
 			if attempt < maxRetries-1 {
-				time.Sleep(5 * time.Second)
+				jitterSleepMs(9000 + attempt*1500)
 			}
 			continue
 		default:
-			markProxyDead(item.ProxyUsed)
 		}
 		if attempt < maxRetries-1 {
-			time.Sleep(2 * time.Second)
+			jitterSleepMs(3000)
 		}
 	}
 	return item
+}
+
+// jitterSleepMs 带随机抖动的 sleep（±30% 波动）
+func jitterSleepMs(baseMs int) {
+	if baseMs <= 0 {
+		return
+	}
+	f := float64(baseMs) * (0.7 + float64(time.Now().UnixNano()%1000)/1000.0*0.6)
+	time.Sleep(time.Duration(f) * time.Millisecond)
+}
+
+// isNetworkError 判断错误是否为纯网络层问题（超时、连接被拒、EOF、DNS解析失败等）
+// 只有这类错误才应该标记代理为 dead，业务风控错误一律不怪代理
+func isNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(s, "timeout"),
+		strings.Contains(s, "deadline exceeded"),
+		strings.Contains(s, "connection refused"),
+		strings.Contains(s, "connection reset"),
+		strings.Contains(s, "no such host"),
+		strings.Contains(s, "dns"),
+		strings.Contains(s, "eof"),
+		strings.Contains(s, "broken pipe"),
+		strings.Contains(s, "network is unreachable"),
+		strings.Contains(s, "tls handshake"):
+		return true
+	}
+	return false
 }
 
 // HandleBatchRegister 批量注册
@@ -696,13 +743,14 @@ func HandleBatchRegister(c *gin.Context) {
 	if req.Concurrency > 32 {
 		req.Concurrency = 32
 	}
-	if req.DelaySec < 0 {
-		req.DelaySec = 2
+	// 最小延迟 3s，太短会被 4399 统一频率风控
+	if req.DelaySec < 3 {
+		req.DelaySec = 3
 	}
 
 	sfzPoolOnce.Do(loadSfzDefaultPool)
 
-	totalCtx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Minute)
+	totalCtx, cancel := context.WithTimeout(c.Request.Context(), 180*time.Minute)
 	defer cancel()
 
 	sem := make(chan struct{}, req.Concurrency)
@@ -714,13 +762,14 @@ func HandleBatchRegister(c *gin.Context) {
 	for i := 0; i < req.Count; i++ {
 		wg.Add(1)
 		sem <- struct{}{}
+		// 全局错峰启动：每个 goroutine 启动前加 0~2s 随机延迟，避免同一时间大量请求同时进入
+		jitterSleepMs((i % req.Concurrency) * 400)
 		go func(idx int) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			defer func() {
-				if req.DelaySec > 0 {
-					time.Sleep(time.Duration(req.DelaySec) * time.Second)
-				}
+				// 每任务结束后带 ±30% 抖动的延迟，避免整齐的间隔模式
+				jitterSleepMs(req.DelaySec * 1000)
 			}()
 			item := doOneRegister(totalCtx, idx, &req)
 			results[idx] = item

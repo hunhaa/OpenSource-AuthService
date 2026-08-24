@@ -92,18 +92,24 @@ func randomUserAgent() string {
 	return list[mrand.IntN(len(list))]
 }
 
-func newDirectHTTPClient(transport http.RoundTripper) *http.Client {
+func newDirectHTTPClient(transport http.RoundTripper, withJar bool) *http.Client {
 	// 注意：接口值 i != nil 不代表底层指针不是 nil（典型陷阱：var t *http.Transport = nil；rt http.RoundTripper = t；此时 rt != nil 但 *t 为空）
 	// 这里必须额外判断，否则 http.Client.Do 会在 (*Transport).alternateRoundTripper 里解引用崩溃。
 	if transport == nil || isNilRoundTripper(transport) {
 		transport = &http.Transport{
-			IdleConnTimeout: 30 * time.Second,
+			IdleConnTimeout:     30 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
 		}
 	}
-	return &http.Client{
+	c := &http.Client{
 		Transport: transport,
-		Timeout:   20 * time.Second,
+		Timeout:   25 * time.Second,
 	}
+	if withJar {
+		jar, _ := cookiejar.New(nil)
+		c.Jar = jar
+	}
+	return c
 }
 
 // isNilRoundTripper 识别"接口非 nil，但内部封装的 *http.Transport 指针为空"的情况
@@ -148,6 +154,7 @@ func getCaptchaImage(ctx context.Context, httpc *http.Client, ua, sid string) ([
 	return b, nil
 }
 
+// doHTTP 模拟真实浏览器请求，补全标准请求头
 func doHTTP(ctx context.Context, httpc *http.Client, method, rawURL, body, ct, ua, referer string) ([]byte, int, http.Header, error) {
 	var rdr io.Reader
 	if body != "" {
@@ -157,15 +164,44 @@ func doHTTP(ctx context.Context, httpc *http.Client, method, rawURL, body, ct, u
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	if ct != "" {
-		req.Header.Set("Content-Type", ct)
-	}
+	// === 模拟 Chrome 真实请求头 ===
+	// 通用基础头
+	req.Header.Set("sec-ch-ua", `"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"`)
+	req.Header.Set("sec-ch-ua-mobile", "?0")
+	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	if ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}
+	// Accept 族
+	if ct == "application/x-www-form-urlencoded" || method == http.MethodPost {
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	} else {
+		req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+	}
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	// 安全相关
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}
+	if method == http.MethodPost {
+		req.Header.Set("Origin", "https://ptlogin.4399.com")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-User", "?1")
+		req.Header.Set("Sec-Fetch-Dest", "document")
+	} else {
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Sec-Fetch-Mode", "no-cors")
+		req.Header.Set("Sec-Fetch-Dest", "image")
+	}
+	if ct != "" {
+		req.Header.Set("Content-Type", ct)
+	}
+	// Connection
+	req.Header.Set("Connection", "keep-alive")
+
 	resp, err := httpc.Do(req)
 	if err != nil {
 		return nil, 0, nil, err
@@ -176,6 +212,15 @@ func doHTTP(ctx context.Context, httpc *http.Client, method, rawURL, body, ct, u
 		return nil, resp.StatusCode, resp.Header, err
 	}
 	return payload, resp.StatusCode, resp.Header, nil
+}
+
+// jitterSleep 带随机抖动的 sleep，±30% 波动
+func jitterSleep(baseMs int) {
+	if baseMs <= 0 {
+		return
+	}
+	f := float64(baseMs) * (0.7 + mrand.Float64()*0.6)
+	time.Sleep(time.Duration(f) * time.Millisecond)
 }
 
 // ---------- 注册 ----------
@@ -206,7 +251,52 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 	if sid == "" {
 		sid = randomSessionID()
 	}
-	httpc := newDirectHTTPClient(req.Transport)
+	// 关键：注册阶段必须带 Cookie Jar，模拟真实用户先访问注册页、再提交表单的流程
+	// 没有 cookie jar 的请求 100% 会被 4399 风控拦截返回「请稍后再试」
+	httpc := newDirectHTTPClient(req.Transport, true)
+	ptloginBase, _ := url.Parse("https://ptlogin.4399.com")
+	www4399, _ := url.Parse("https://www.4399.com")
+
+	// ==========================================
+	// Step 0: Session 预热 —— 模拟真实浏览器行为
+	//   1) 访问 www.4399.com 首页种基础 cookie
+	//   2) 访问 ptlogin/regFrame.do 注册框架页种 session cookie
+	// ==========================================
+	step0Start := time.Now()
+	_ = step0Start
+
+	// 0a) 访问首页（获取 PVID / track 等 cookies，建立 referer 链）
+	if _, _, _, err := doHTTP(ctx, httpc, http.MethodGet, "https://www.4399.com/", "", "", ua, ""); err == nil {
+		jitterSleep(600 + mrand.IntN(500))
+	}
+
+	// 0b) 访问注册框架页 regFrame.do（这是浏览器真实加载顺序，必须先执行）
+	//     这一步会种下 q_c_uid、4399_cn_firsttime、session 关联等关键 cookie
+	regFrameURL := directReferer + "?appId=www_home&displayMode=popup&level=4&sec=1"
+	rfBody, rfStatus, _, rfErr := doHTTP(ctx, httpc, http.MethodGet, regFrameURL, "", "", ua, "https://www.4399.com/")
+	if rfErr != nil || rfStatus != 200 {
+		log.Printf("[4399-Direct] 注册框架页预热失败 status=%d err=%v （继续尝试注册）", rfStatus, rfErr)
+	} else {
+		// 提取页面中的 captcha_id（有的版本 regFrame.do 会返回内嵌 captchaId）
+		if match := captchaIDRegexp.FindSubmatch(rfBody); len(match) >= 2 && req.SessionID == "" {
+			sid = string(match[1])
+		}
+	}
+	jitterSleep(800 + mrand.IntN(800))
+
+	// 0c) 如果有 cookie jar，种一些模拟指纹 cookies（模拟 4399 分析脚本设置的值）
+	if httpc.Jar != nil {
+		// 4399_cn_firsttime: 首次访问时间戳
+		firstTime := fmt.Sprintf("%d", time.Now().Unix()*1000)
+		httpc.Jar.SetCookies(www4399, []*http.Cookie{
+			{Name: "4399_cn_firsttime", Value: firstTime, Path: "/", Domain: ".4399.com"},
+			{Name: "4399_cn_recomm", Value: "-", Path: "/", Domain: ".4399.com"},
+			{Name: "4399_cn_land_page", Value: "1", Path: "/", Domain: ".4399.com"},
+		})
+		httpc.Jar.SetCookies(ptloginBase, []*http.Cookie{
+			{Name: "ptusertype", Value: "www_home.4399_login", Path: "/", Domain: ".4399.com"},
+		})
+	}
 
 	// 获取并识别验证码（最多重试 3 次）
 	// 注意：识别失败直接返回错误，禁止使用随机值蒙混——验证码错误会被 4399 风控标记
@@ -222,17 +312,16 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 			captchaImg, err := getCaptchaImage(ctx, httpc, ua, sid)
 			if err != nil {
 				lastErr = err
-				time.Sleep(500 * time.Millisecond)
+				jitterSleep(600 + mrand.IntN(400))
 				continue
 			}
 			recognized, err := RecognizeCaptchaBytes(captchaImg)
 			if err != nil {
 				lastErr = err
 				if errors.Is(err, ErrCaptchaEngineNotReady) {
-					// OCR 引擎未就绪，无需再重试
 					break
 				}
-				time.Sleep(500 * time.Millisecond)
+				jitterSleep(600 + mrand.IntN(400))
 				continue
 			}
 			if len(recognized) == 4 {
@@ -240,7 +329,7 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 				break
 			}
 			lastErr = fmt.Errorf("识别结果 %q 不是 4 位，重试", recognized)
-			time.Sleep(400 * time.Millisecond)
+			jitterSleep(500 + mrand.IntN(300))
 			sid = randomSessionID()
 		}
 		if captcha == "" {
@@ -248,6 +337,8 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 			return nil, fmt.Errorf("%w: %v", ErrCaptchaFailed, lastErr)
 		}
 	}
+	// 识别完验证码，模拟用户填写表单停顿 0.8~1.5s
+	jitterSleep(900 + mrand.IntN(600))
 
 	encPwd, err := encryptWebRegisterAES(req.Password)
 	if err != nil {
@@ -503,9 +594,8 @@ func DirectLoginSAuth(ctx context.Context, req *DirectRegisterRequest) (string, 
 	if ua == "" {
 		ua = randomUserAgent()
 	}
-	httpc := newDirectHTTPClient(req.Transport)
-	jar, _ := cookiejar.New(nil)
-	httpc.Jar = jar
+	httpc := newDirectHTTPClient(req.Transport, true)
+	jar := httpc.Jar
 
 	// 1) verify.do 检测
 	sessionUUID := newUUIDUpper()
