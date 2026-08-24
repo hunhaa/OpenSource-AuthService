@@ -24,90 +24,135 @@ type UpdateProfileRequest struct {
 
 type UpdateProfileResponse struct {
 	Response
+	AppliedNickname string `json:"applied_nickname,omitempty"`
+	AppliedPersona  string `json:"applied_persona,omitempty"`
 }
 
 // UpdateProfile 批量更新账号资料（昵称/简介/头像/头像框/性别）。
-// 接口路径: /pe-user-detail/update
+// 网易 G79 没有统一的 /pe-user-detail/update 接口，各字段分属不同端点：
+//   - 昵称 → /pe-nickname-setting/update（通过 UpdateNickname）
+//   - 简介/头像/头像框/性别 → /pe-set-user-setting-list 的 data.persona_data
 func (c *Client) UpdateProfile(req *UpdateProfileRequest) (*UpdateProfileResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("UpdateProfile: request 不能为空")
 	}
-	api := "/pe-user-detail/update"
 
-	requestData := map[string]interface{}{}
-	if req.Name != "" {
-		requestData["name"] = req.Name
-	}
-	if req.Signature != "" {
-		requestData["signature"] = req.Signature
-	}
-	if req.HeadImage != "" {
-		requestData["head_image"] = req.HeadImage
-	}
-	if req.FrameID != "" {
-		requestData["frame_id"] = req.FrameID
-	}
-	if req.Gender != "" {
-		requestData["gender"] = req.Gender
-	}
-	if len(requestData) == 0 {
+	hasName := strings.TrimSpace(req.Name) != ""
+	hasPersona := strings.TrimSpace(req.Signature) != "" ||
+		strings.TrimSpace(req.HeadImage) != "" ||
+		strings.TrimSpace(req.FrameID) != "" ||
+		strings.TrimSpace(req.Gender) != ""
+	if !hasName && !hasPersona {
 		return nil, fmt.Errorf("UpdateProfile: 至少填写一个要修改的字段")
 	}
 
-	jsonData, err := json.Marshal(requestData)
-	if err != nil {
-		return nil, err
-	}
+	result := &UpdateProfileResponse{}
+	var lastErr error
 
-	httpReq, err := http.NewRequest("POST", c.ReleaseJSON.ApiGatewayUrl+api, strings.NewReader(string(jsonData)))
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json; charset=utf-8")
-	httpReq.Header.Set("User-Agent", "WPFLauncher/0.0.0.0")
-	httpReq.Header.Set("user-id", c.UserID)
-	token := CalculateDynamicToken(api, string(jsonData), c.UserToken)
-	httpReq.Header.Set("user-token", token)
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := readResponseBody(resp)
-	if err != nil {
-		return nil, err
-	}
-
-	var result UpdateProfileResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("解析 UpdateProfile 响应失败: %v, 响应内容: %s", err, string(respBody))
-	}
-	if result.Code != 0 {
-		return &result, fmt.Errorf("UpdateProfile 失败: code=%d msg=%s", result.Code, result.Message)
-	}
-
-	// 更新本地缓存
-	if c.UserDetail != nil {
-		if req.Name != "" {
-			c.UserDetail.Name = req.Name
-		}
-		if req.Signature != "" {
-			c.UserDetail.Signature = req.Signature
-		}
-		if req.HeadImage != "" {
-			c.UserDetail.HeadImage = req.HeadImage
-		}
-		if req.FrameID != "" {
-			c.UserDetail.FrameID = req.FrameID
-		}
-		if req.Gender != "" {
-			c.UserDetail.Gender = req.Gender
+	// ── 1. 昵称：走独立的 /pe-nickname-setting/update ──
+	if hasName {
+		name := strings.TrimSpace(req.Name)
+		if err := c.UpdateNickname(name); err != nil {
+			lastErr = fmt.Errorf("更新昵称失败: %w", err)
+		} else {
+			result.AppliedNickname = name
+			if c.UserDetail != nil {
+				c.UserDetail.Name = name
+			}
 		}
 	}
-	return &result, nil
+
+	// ── 2. 其他资料字段：走 /pe-set-user-setting-list 的 persona_data ──
+	if hasPersona {
+		api := "/pe-set-user-setting-list"
+		persona := map[string]any{}
+		if strings.TrimSpace(req.Signature) != "" {
+			persona["signature"] = strings.TrimSpace(req.Signature)
+		}
+		if strings.TrimSpace(req.HeadImage) != "" {
+			persona["head_image"] = strings.TrimSpace(req.HeadImage)
+		}
+		if strings.TrimSpace(req.FrameID) != "" {
+			persona["frame_id"] = strings.TrimSpace(req.FrameID)
+		}
+		if strings.TrimSpace(req.Gender) != "" {
+			persona["gender"] = strings.TrimSpace(req.Gender)
+		}
+		requestData := map[string]interface{}{
+			"data": map[string]any{
+				"persona_data": persona,
+			},
+		}
+
+		jsonData, err := json.Marshal(requestData)
+		if err != nil {
+			if lastErr == nil {
+				lastErr = err
+			}
+		} else {
+			httpReq, err := http.NewRequest("POST", c.ReleaseJSON.ApiGatewayUrl+api, strings.NewReader(string(jsonData)))
+			if err != nil {
+				if lastErr == nil {
+					lastErr = fmt.Errorf("构建 persona 请求失败: %w", err)
+				}
+			} else {
+				httpReq.Header.Set("Content-Type", "application/json; charset=utf-8")
+				httpReq.Header.Set("User-Agent", "WPFLauncher/0.0.0.0")
+				httpReq.Header.Set("user-id", c.UserID)
+				token := CalculateDynamicToken(api, string(jsonData), c.UserToken)
+				httpReq.Header.Set("user-token", token)
+
+				resp, err := c.httpClient.Do(httpReq)
+				if err != nil {
+					if lastErr == nil {
+						lastErr = fmt.Errorf("发送 persona 请求失败: %w", err)
+					}
+				} else {
+					respBody, _ := readResponseBody(resp)
+					_ = resp.Body.Close()
+					var setResp Response
+					if jerr := json.Unmarshal(respBody, &setResp); jerr != nil {
+						if lastErr == nil {
+							lastErr = fmt.Errorf("解析 persona 响应失败: %v, 内容: %s", jerr, trimForErr(respBody))
+						}
+					} else if setResp.Code != 0 {
+						if lastErr == nil {
+							lastErr = fmt.Errorf("更新 persona 资料失败: code=%d msg=%s", setResp.Code, setResp.Message)
+						}
+					} else {
+						if personaBytes, perr := json.Marshal(persona); perr == nil {
+							result.AppliedPersona = string(personaBytes)
+						}
+						result.Code = setResp.Code
+						result.Message = setResp.Message
+						if c.UserDetail != nil {
+							if v, ok := persona["signature"].(string); ok {
+								c.UserDetail.Signature = v
+							}
+							if v, ok := persona["head_image"].(string); ok {
+								c.UserDetail.HeadImage = v
+							}
+							if v, ok := persona["frame_id"].(string); ok {
+								c.UserDetail.FrameID = v
+							}
+							if v, ok := persona["gender"].(string); ok {
+								c.UserDetail.Gender = v
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if lastErr != nil {
+		if result.Code == 0 && (result.AppliedNickname != "" || result.AppliedPersona != "") {
+			// 有部分成功：返回已应用的信息 + 错误供上层感知
+			return result, lastErr
+		}
+		return nil, lastErr
+	}
+	return result, nil
 }
 
 // UpdateSignature 只改简介（个性签名），是 UpdateProfile 的简写版。
@@ -129,3 +174,4 @@ func (c *Client) UpdateHeadImage(headImageID string) error {
 	_, err := c.UpdateProfile(&UpdateProfileRequest{HeadImage: headImageID})
 	return err
 }
+
