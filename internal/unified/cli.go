@@ -24,7 +24,7 @@ import (
 
 // BuildVersion 是 FunAuth 的 7 位版本代号，每次发版递增。
 // 版本号格式：PR + 5 位递增数字（如 PR00001、PR00002 …）。
-const BuildVersion = "PR00010"
+const BuildVersion = "PR00011"
 
 const banner = `
  ___              _   _         _   _

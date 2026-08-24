@@ -170,6 +170,12 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		g.POST("/batch/proxy/check", HandleCheckProxies)
 		g.GET("/batch/stats", HandleStatsBatch)
 
+		// 账号操作（改昵称/简介/头像/皮肤/动态/活力签到）
+		RegisterAccountOpsRoutes(g)
+
+		// 服务器号 → 服务器 ID 自动转换（无需登录态，用临时 g79client 查搜索接口）
+		g.POST("/rental/lookup-server-name", HandleRentalLookupServerName)
+
 		// 注册 (Bunker 风格)
 		RegisterRegisterRoutes(g)
 	}

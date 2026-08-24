@@ -13,6 +13,7 @@
     <span class="title">BUNKER<small>WEB</small></span>
     <nav class="tabs">
       <button class="tab active" data-tab="tab-auth">登录认证</button>
+      <button class="tab" data-tab="tab-account">账号操作</button>
       <button class="tab" data-tab="tab-regbot">注册机</button>
       <button class="tab" data-tab="tab-batch">塞入</button>
       <button class="tab" data-tab="tab-register">账号注册</button>
@@ -259,8 +260,12 @@
       </div>
       <div class="grid-2" style="margin-top:18px">
         <div>
-          <label>服务器号（统一）</label>
-          <input id="batch-server-id" type="text" placeholder="例如 52258662">
+          <label>服务器号（统一，支持纯数字号或服务器名，自动转服ID）</label>
+          <div class="row" style="gap:6px;margin-top:4px">
+            <input id="batch-server-id" type="text" placeholder="例如 52258662 → 自动 lookup">
+            <button id="btn-batch-lookup" class="ghost small">🔍 转服ID</button>
+          </div>
+          <div id="batch-lookup-result" class="hint small" style="margin-top:4px"></div>
         </div>
         <div>
           <label>服务器密码（可选，统一）</label>
@@ -284,11 +289,98 @@
       <div id="batch-authv2-result"></div>
     </section>
   </section><!-- /tab-batch -->
+
+  <!-- Account Panel: 账号操作（改昵称/简介/头像/皮肤/资料/动态/活力） -->
+  <section id="tab-account" class="tab-panel">
+    <section class="card">
+      <h2><span class="step">👤</span> 选择要操作的账号</h2>
+      <p class="hint">先到「登录认证」tab 登录账号，或到「塞入」tab 完成批量进入，下方会自动出现 token 选择器。所有操作都基于当前选中 token 对应的已登录会话。</p>
+      <div class="grid-2">
+        <div>
+          <label>会话 Token（从登录认证 / 塞入里自动带出）</label>
+          <select id="acc-token">
+            <option value="">— 尚未登录 —</option>
+          </select>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div class="row" style="gap:6px">
+            <button id="btn-acc-refresh" class="ghost">🔄 刷新账号资料</button>
+            <button id="btn-acc-checkin" class="ghost">⚡ 活力签到</button>
+          </div>
+        </div>
+      </div>
+      <div id="acc-profile" class="acc-profile hidden" style="margin-top:16px"></div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">✏️</span> 改昵称 / 改简介 / 改头像 / 改性别</h2>
+      <div class="grid-2">
+        <div>
+          <label>新昵称（留空不改）</label>
+          <input id="acc-name" type="text" placeholder="例如 FunAuth-01">
+        </div>
+        <div>
+          <label>新头像 ID / HeadImage（留空不改）</label>
+          <input id="acc-head" type="text" placeholder="素材 item_id，例如 default_head_001">
+        </div>
+        <div>
+          <label>性别（male/female，留空不改）</label>
+          <input id="acc-gender" type="text" placeholder="male / female">
+        </div>
+        <div>
+          <label>头像框 FrameID（留空不改）</label>
+          <input id="acc-frame" type="text" placeholder="留空不改">
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <label>简介 / 个性签名（留空不改）</label>
+        <textarea id="acc-sign" rows="3" placeholder="例如：今天也要加油鸭！"></textarea>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button id="btn-acc-update" class="primary">💾 保存修改</button>
+        <span id="acc-update-msg" class="msg"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">👕</span> 更换皮肤</h2>
+      <p class="hint">输入皮肤的 <code>item_id</code>（可在游戏内商城列表、或 store_search_mcgame_items 接口中获取）。若未持有该皮肤，内部会先走 Purchase，再 Apply 到 skin_data。</p>
+      <div class="grid-2">
+        <div>
+          <label>皮肤 ItemID</label>
+          <input id="acc-skin-id" type="text" placeholder="例如 skin_steve_001">
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btn-acc-skin" class="primary">🎨 更换皮肤</button>
+        <span id="acc-skin-msg" class="msg"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">💬</span> 发送个人动态</h2>
+      <div>
+        <label>动态正文</label>
+        <textarea id="acc-moment-content" rows="4" placeholder="今天 FunAuth PR00011 成功塞入 100 个号，爽！"></textarea>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label class="switch">
+          <input id="acc-moment-comment" type="checkbox" checked>
+          <span>允许评论</span>
+        </label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-acc-moment" class="primary">📣 发布动态</button>
+        <span id="acc-moment-msg" class="msg"></span>
+      </div>
+    </section>
+  </section><!-- /tab-account -->
 </main>
 
 <footer>
   <div>适配版本：<b id="ev">—</b> · 补丁 <b id="pv">—</b></div>
-  <div class="sub"><span id="build-ver">⚡ PR00010</span> · 基于 g79client · 参考 Cynic158/Bunker-Web 与 CoozillaX/bunker-web 设计</div>
+  <div class="sub"><span id="build-ver">⚡ PR00011</span> · 基于 g79client · 参考 Cynic158/Bunker-Web 与 CoozillaX/bunker-web 设计</div>
 </footer>
 
 <script src="app.js"></script>

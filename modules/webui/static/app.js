@@ -164,6 +164,7 @@ async function doAuth(){
     showFBToken(d);
     setEnabled("card-link", true);
     setEnabled("card-search", true);
+    accountRefreshTokenSelect();
     toast("登录成功","ok");
   }catch(e){
     setMsg("auth-msg", String(e.message||e), "err");
@@ -244,6 +245,190 @@ async function doAuthV2(){
 
 // ---------- batch flow ----------
 let batchTokens = []; // 批量进入成功后的 token 列表
+
+// --- 账号操作：已登录 token 注册表（既包含登录认证的单个 token，也包含批量塞入产生的 tokens）
+function accountRefreshTokenSelect(){
+  const sel = document.getElementById("acc-token");
+  if(!sel) return;
+  const cur = sel.value;
+  // 收集候选
+  const opts = [];
+  if(currentToken){
+    opts.push({v:currentToken, label:"主会话(登录认证) · token="+currentToken.slice(0,10)+"…"});
+  }
+  (batchTokens||[]).forEach((t,i)=>{
+    opts.push({v:t, label:"塞入会话 #"+(i+1)+" · token="+t.slice(0,10)+"…"});
+  });
+  // 去重
+  const seen = new Set();
+  sel.innerHTML = opts.length===0 ? `<option value="">— 尚未登录 —</option>` : "";
+  opts.forEach(o=>{
+    if(seen.has(o.v)) return;
+    seen.add(o.v);
+    const op = document.createElement("option");
+    op.value = o.v;
+    op.textContent = o.label;
+    sel.appendChild(op);
+  });
+  // 保留用户原选择（如果仍在列表里）
+  if(cur && seen.has(cur)) sel.value = cur;
+  else if(sel.options.length>0) sel.value = sel.options[0].value;
+}
+function accountSelectedToken(){
+  const sel = document.getElementById("acc-token");
+  return (sel && sel.value) || currentToken || (batchTokens && batchTokens[0]) || "";
+}
+function renderAccountProfile(d){
+  const box = document.getElementById("acc-profile");
+  if(!box) return;
+  if(!d){ box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const bindBadge = (label, v) => `<div class="chip ${v?"ok":"err"}" style="margin-right:6px">${label}: ${v?"✅ 已绑定":"❌ 未绑定"}</div>`;
+  box.innerHTML = `
+    <div class="kv">
+      <div class="k">昵称</div><div class="v"><b>${d.nickname||"-"}</b> <span class="hint small">(剩余改名次数: ${d.remain_revise_name_cnt||0})</span></div>
+      <div class="k">简介 Signature</div><div class="v">${d.signature||'<span class="hint small">(空)</span>'}</div>
+      <div class="k">头像 / HeadImage</div><div class="v">${d.head_image||"<span class='hint small'>(默认)</span>"} · 框: ${d.frame_id||"-"}</div>
+      <div class="k">性别</div><div class="v">${d.gender||"-"}</div>
+      <div class="k">等级 / 分数</div><div class="v">Lv.${d.level||"-"} · Score ${d.score||"-"}</div>
+      <div class="k">皮肤数 / 披风数</div><div class="v">${d.skin_number||0} 皮 · ${d.cape_number||0} 披风</div>
+      <div class="k">VIP</div><div class="v">${d.is_vip?"✅ VIP (经验VIP: "+(d.is_expr_vip?"是":"否")+") · 等级 "+(d.recharge_vip_level||"-"):"❌ 非VIP"}</div>
+      <div class="k">实名 / 绑定</div><div class="v">
+        ${bindBadge("实名", String(d.realname_status||"0")!=="0")}
+        ${bindBadge("手机", String(d.is_phone_bind||"0")!=="0" || d.need_phone_bind===false)}
+        ${bindBadge("微信", !!d.is_bind)}
+      </div>
+      <div class="k">今日活力剩余</div><div class="v">${d.vitality_rest_sec||0} 秒 = ${d.vitality_date||"-"}</div>
+      <div class="k">今日成长 XP</div><div class="v">在线 +${d.daily_xp_online||0} · 充值 +${d.daily_xp_recharge||0}</div>
+      <div class="k">公开状态 Public</div><div class="v">${d.public_flag?"公开":"私密"}</div>
+      <div class="k">UserID / Account</div><div class="v mono">${d.user_id||"-"} · ${d.account||"-"}</div>
+    </div>
+  `;
+  // 自动回填到下面的修改栏，方便用户基于现有内容微调
+  const n = document.getElementById("acc-name"); if(n && !n.value) n.value = d.nickname||"";
+  const s = document.getElementById("acc-sign"); if(s && !s.value) s.value = d.signature||"";
+  const h = document.getElementById("acc-head"); if(h && !h.value) h.value = d.head_image||"";
+  const f = document.getElementById("acc-frame"); if(f && !f.value) f.value = d.frame_id||"";
+  const g = document.getElementById("acc-gender"); if(g && !g.value) g.value = d.gender||"";
+}
+async function accountRefreshProfile(){
+  const token = accountSelectedToken();
+  if(!token){ toast("请先登录（到「登录认证」或「塞入」）","err"); return; }
+  try{
+    const d = await call("/account/profile", {token});
+    renderAccountProfile(d);
+    toast("账号资料已刷新","ok");
+  }catch(e){
+    renderAccountProfile(null);
+    toast(String(e.message||e),"err");
+  }
+}
+async function accountUpdateProfile(){
+  const token = accountSelectedToken();
+  if(!token){ toast("请先登录","err"); return; }
+  const payload = {token,
+    name:      ($("#acc-name")||{}).value ? ($("#acc-name")).value.trim() : "",
+    signature: ($("#acc-sign")||{}).value || "",
+    head_image:($("#acc-head")||{}).value ? ($("#acc-head")).value.trim() : "",
+    frame_id:  ($("#acc-frame")||{}).value ? ($("#acc-frame")).value.trim() : "",
+    gender:    ($("#acc-gender")||{}).value ? ($("#acc-gender")).value.trim() : "",
+  };
+  if(!payload.name && !payload.signature && !payload.head_image && !payload.frame_id && !payload.gender){
+    toast("请至少填一项要修改的内容","err"); return;
+  }
+  setMsg("acc-update-msg","保存中…","");
+  $("#btn-acc-update").disabled = true;
+  try{
+    const d = await call("/account/update", payload);
+    setMsg("acc-update-msg", "✅ 已保存: " + JSON.stringify(d.applied||{}), "ok");
+    toast("账号资料已更新","ok");
+    await accountRefreshProfile();
+  }catch(e){
+    setMsg("acc-update-msg", String(e.message||e), "err");
+    toast(String(e.message||e),"err");
+  }finally{
+    $("#btn-acc-update").disabled = false;
+  }
+}
+async function accountChangeSkin(){
+  const token = accountSelectedToken();
+  if(!token){ toast("请先登录","err"); return; }
+  const itemID = ($("#acc-skin-id")||{}).value ? $("#acc-skin-id").value.trim() : "";
+  if(!itemID){ toast("请填皮肤 ItemID","err"); return; }
+  setMsg("acc-skin-msg","更换中…（先购买再 Apply，约 3-8 秒）","");
+  $("#btn-acc-skin").disabled = true;
+  try{
+    await call("/account/skin", {token, item_id: itemID});
+    setMsg("acc-skin-msg", "✅ 皮肤已切换为 "+itemID, "ok");
+    toast("皮肤已切换","ok");
+  }catch(e){
+    setMsg("acc-skin-msg", String(e.message||e), "err");
+    toast(String(e.message||e),"err");
+  }finally{
+    $("#btn-acc-skin").disabled = false;
+  }
+}
+async function accountSendMoment(){
+  const token = accountSelectedToken();
+  if(!token){ toast("请先登录","err"); return; }
+  const content = ($("#acc-moment-content")||{}).value || "";
+  if(!content.trim()){ toast("请输入动态正文","err"); return; }
+  const commentAuth = $("#acc-moment-comment") && $("#acc-moment-comment").checked ? 1 : 0;
+  setMsg("acc-moment-msg","发送中…","");
+  $("#btn-acc-moment").disabled = true;
+  try{
+    const d = await call("/account/moment", {token, content, opts:{comment_auth: commentAuth}});
+    setMsg("acc-moment-msg", "✅ 已发布 msg_id="+d.msg_id, "ok");
+    toast("动态已发布","ok");
+    $("#acc-moment-content").value = "";
+  }catch(e){
+    setMsg("acc-moment-msg", String(e.message||e), "err");
+    toast(String(e.message||e),"err");
+  }finally{
+    $("#btn-acc-moment").disabled = false;
+  }
+}
+async function accountCheckInVitality(){
+  const token = accountSelectedToken();
+  if(!token){ toast("请先登录","err"); return; }
+  try{
+    const d = await call("/account/vitality", {token});
+    renderAccountProfile(Object.assign({
+      vitality_rest_sec: d.rest_seconds||0,
+      vitality_date: d.date||"-",
+      daily_xp_online: d.daily_xp_online||0,
+      daily_xp_recharge: d.daily_xp_recharge||0,
+    }, $("#acc-profile").dataset ? JSON.parse($("#acc-profile").dataset.last||"{}") : {}));
+    toast(`活力签到成功 · 剩余 ${d.rest_hhmm||"-"}`, "ok");
+  }catch(e){
+    toast(String(e.message||e),"err");
+  }
+}
+// --- 批量塞入：服务器号 → 服ID lookup
+async function batchLookupServerName(silent){
+  const input = $("#batch-server-id");
+  const resultBox = $("#batch-lookup-result");
+  if(!input) return null;
+  const q = input.value.trim();
+  if(!q){ if(!silent) toast("请先填服务器号","err"); return null; }
+  if(resultBox) resultBox.textContent = "🔍 查询中…";
+  if(resultBox) resultBox.classList.remove("ok","err");
+  try{
+    const d = await call("/rental/lookup-server-name", {server_name: q});
+    if(resultBox){
+      resultBox.innerHTML = `✅ 服务器号 <b>${d.server_name}</b> → 服ID: <span class="mono">${d.entity_id}</span>`;
+      resultBox.classList.add("ok");
+    }
+    return d.entity_id;
+  }catch(e){
+    if(resultBox){
+      resultBox.textContent = "❌ " + String(e.message||e);
+      resultBox.classList.add("err");
+    }
+    if(!silent) toast(String(e.message||e),"err");
+    return null;
+  }
+}
 
 function batchAddRow(cookie="", nick=""){
   const list = $("#batch-list");
@@ -329,9 +514,11 @@ function renderBatchEnterResult(data){
   // 汇总
   const summary = document.createElement("div");
   summary.className = "batch-res-row";
+  const lookup = data.server_name_lookup;
   summary.innerHTML = `<div class="batch-res-meta"><div class="batch-res-name">汇总</div>
-    <div class="batch-res-detail">共 ${data.total} 个 · 成功 ${data.ok_count} · 失败 ${data.fail_count}</div></div>`;
+    <div class="batch-res-detail">共 ${data.total} 个 · 成功 ${data.ok_count} · 失败 ${data.fail_count}${lookup?` · 服号【${lookup.input||""}】→ 服ID ${(lookup.resolved||"").slice(0,16)}${(lookup.resolved||"").length>16?"…":""}`:""}</div></div>`;
   box.appendChild(summary);
+  accountRefreshTokenSelect();
 }
 function renderBatchAuthV2Result(data){
   const box = $("#batch-authv2-result");
@@ -368,11 +555,12 @@ function renderBatchAuthV2Result(data){
     row.appendChild(actions);
     box.appendChild(row);
   });
-  // 汇总
+  // 汇总（renderBatchAuthV2Result）
   const summary = document.createElement("div");
   summary.className = "batch-res-row";
+  const lookupA = data.server_name_lookup;
   summary.innerHTML = `<div class="batch-res-meta"><div class="batch-res-name">汇总</div>
-    <div class="batch-res-detail">共 ${data.total} 个 · 成功 ${data.ok_count} · 失败 ${data.fail_count}</div></div>`;
+    <div class="batch-res-detail">共 ${data.total} 个 · 成功 ${data.ok_count} · 失败 ${data.fail_count}${lookupA?` · 服号【${lookupA.input||""}】→ 服ID ${(lookupA.resolved||"").slice(0,16)}${(lookupA.resolved||"").length>16?"…":""}`:""}</div></div>`;
   box.appendChild(summary);
 }
 async function doBatchEnter(){
@@ -380,6 +568,8 @@ async function doBatchEnter(){
   if(accounts.length===0){ toast("请至少添加一个有效 Cookie","err"); return; }
   const sid = $("#batch-server-id").value.trim();
   if(!sid){ toast("请填写服务器号","err"); return; }
+  // 先 lookup 一次，把前端状态栏同步一下（后端也会再 lookup 一次作为最终依据）
+  await batchLookupServerName(true);
   const pwd = $("#batch-server-pwd").value;
   setMsg("batch-enter-msg", `正在批量进入 ${accounts.length} 个账号…（每个约 5-10 秒）`, "");
   $("#btn-batch-enter").disabled = true;
@@ -773,6 +963,25 @@ document.addEventListener("DOMContentLoaded", ()=>{
   });
   $("#btn-batch-enter").addEventListener("click", doBatchEnter);
   $("#btn-batch-authv2").addEventListener("click", doBatchAuthV2);
+  // 服务器号 → 服ID lookup 事件（按钮 + 失焦）
+  $("#btn-batch-lookup")?.addEventListener("click", ()=>batchLookupServerName(false));
+  $("#batch-server-id")?.addEventListener("blur", ()=>{
+    const v = $("#batch-server-id").value.trim();
+    if(v && /^\d{6,}$/.test(v)) batchLookupServerName(true);
+  });
+
+  // 账号操作
+  $("#btn-acc-refresh")?.addEventListener("click", accountRefreshProfile);
+  $("#btn-acc-checkin")?.addEventListener("click", accountCheckInVitality);
+  $("#btn-acc-update")?.addEventListener("click", accountUpdateProfile);
+  $("#btn-acc-skin")?.addEventListener("click", accountChangeSkin);
+  $("#btn-acc-moment")?.addEventListener("click", accountSendMoment);
+  $("#acc-token")?.addEventListener("change", ()=>{
+    renderAccountProfile(null);
+    // 切换账号后自动刷新资料
+    if($("#acc-token").value) accountRefreshProfile();
+  });
+  accountRefreshTokenSelect();
 
   // restore tab & token persistence
   const savedTab = localStorage.getItem("bunker_tab") || "tab-auth";
@@ -781,6 +990,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     setEnabled("card-link", true);
     setEnabled("card-search", true);
     setMsg("auth-msg","已加载上一次 Token (可直接点刷新重新登录)","ok");
+    accountRefreshTokenSelect();
   }
   initStatus();
 });

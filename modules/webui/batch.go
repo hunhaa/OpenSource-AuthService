@@ -11,7 +11,6 @@ import (
 	linkconnection "github.com/Yeah114/g79client/service/link_connection"
 	"github.com/gin-gonic/gin"
 )
-
 // ---------- 请求结构体 ----------
 
 type BatchAccount struct {
@@ -28,6 +27,71 @@ type BatchEnterReq struct {
 type BatchAuthV2Req struct {
 	Tokens   []string `json:"tokens"`
 	ServerID string   `json:"server_id"`
+}
+
+// ---------- 服务器号 → 服务器 ID ----------
+
+// lookupServerNameToEntityID 将服务器号（纯数字，例如 52258662）或服务器名查询为 server entity_id。
+// 输入若本身就是 entity_id 样式（含非数字字符，或 > 36 位 UUID-like）也会原样返回。
+func lookupServerNameToEntityID(serverNameOrID string) (string, error) {
+	serverNameOrID = strings.TrimSpace(serverNameOrID)
+	if serverNameOrID == "" {
+		return "", fmt.Errorf("服务器号不能为空")
+	}
+	// 如果看起来像纯数字服务器号（<= 32 位）→ 走搜索
+	isPureDigits := true
+	for _, ch := range serverNameOrID {
+		if ch < '0' || ch > '9' {
+			isPureDigits = false
+			break
+		}
+	}
+	if !isPureDigits && len(serverNameOrID) >= 16 {
+		// 不是纯数字且比较长，大概率就是 entity_id 直接返回
+		return serverNameOrID, nil
+	}
+	// 用临时客户端搜索（注意：SearchRentalServerByName 走的是已 releaseJSON.WebServerUrl 的接口）
+	cli, err := g79client.NewClient()
+	if err != nil {
+		return "", fmt.Errorf("初始化临时客户端失败: %w", err)
+	}
+	resp, err := cli.SearchRentalServerByName(serverNameOrID)
+	if err != nil {
+		return "", fmt.Errorf("搜索租赁服失败: %w", err)
+	}
+	if resp.Code != 0 {
+		return "", fmt.Errorf("搜索租赁服返回 code=%d msg=%s", resp.Code, resp.Message)
+	}
+	if len(resp.Entities) == 0 {
+		return "", fmt.Errorf("未找到服务器号=%s 对应的租赁服，请检查服务器号是否正确", serverNameOrID)
+	}
+	// 优先找 Name(纯数字服号) 或 ServerName 完全匹配，否则返回第一个
+	for _, e := range resp.Entities {
+		if e.Name.String() == serverNameOrID || e.ServerName == serverNameOrID {
+			return e.EntityID.String(), nil
+		}
+	}
+	return resp.Entities[0].EntityID.String(), nil
+}
+
+// HandleRentalLookupServerName 前端批量塞入时，输入服务器号自动转换为服务器ID
+func HandleRentalLookupServerName(c *gin.Context) {
+	var req struct {
+		ServerName string `json:"server_name"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, 400, "参数错误: %v", err)
+		return
+	}
+	id, err := lookupServerNameToEntityID(req.ServerName)
+	if err != nil {
+		fail(c, 422, "%v", err)
+		return
+	}
+	ok(c, gin.H{
+		"server_name": req.ServerName,
+		"entity_id":   id,
+	})
 }
 
 // ---------- 响应结构体 ----------
@@ -71,6 +135,7 @@ func normalizeCookie(cookie string) string {
 
 // HandleBatchEnter 批量认证+Link+进入租赁服
 // 对每个 cookie 依次执行：认证 → 设置昵称 → Link+GameStart → EnterRentalServerWorld
+// 参数 server_id 既支持真实 entity_id，也支持服务器号（纯数字），会自动 lookup 转换
 func HandleBatchEnter(c *gin.Context) {
 	var req BatchEnterReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -85,6 +150,14 @@ func HandleBatchEnter(c *gin.Context) {
 		fail(c, 400, "server_id 不能为空")
 		return
 	}
+
+	// 自动将服务器号（纯数字）转换为真实 entity_id
+	realServerID, lookupErr := lookupServerNameToEntityID(req.ServerID)
+	if lookupErr != nil {
+		fail(c, 422, "服务器号转换失败: %v", lookupErr)
+		return
+	}
+	serverIDUsed := realServerID
 
 	results := make([]BatchEnterResult, len(req.Accounts))
 	for i, acc := range req.Accounts {
@@ -193,7 +266,7 @@ func HandleBatchEnter(c *gin.Context) {
 		r.Token = token
 
 		// 5. EnterRentalServerWorld
-		resp, err := cli.EnterRentalServerWorld(req.ServerID, req.Password)
+		resp, err := cli.EnterRentalServerWorld(serverIDUsed, req.Password)
 		if err != nil {
 			r.Status = "error"
 			r.Error = fmt.Sprintf("%sEnterRentalServerWorld失败: %v", r.Error, err)
@@ -226,12 +299,17 @@ func HandleBatchEnter(c *gin.Context) {
 		"total":      len(results),
 		"ok_count":   okCount,
 		"fail_count": len(results) - okCount,
-		"server_id":  req.ServerID,
+		"server_id":  serverIDUsed,
+		"server_name_lookup": gin.H{
+			"input":   req.ServerID,
+			"resolved": realServerID,
+		},
 	})
 }
 
 // HandleBatchAuthV2 批量生成 AuthV2 ChainInfo
 // 对每个 token 依次执行：加载会话 → 检查Link → 生成AuthV2数据 → 发送请求
+// 参数 server_id 既支持真实 entity_id，也支持服务器号（纯数字），会自动 lookup 转换
 func HandleBatchAuthV2(c *gin.Context) {
 	var req BatchAuthV2Req
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -246,6 +324,14 @@ func HandleBatchAuthV2(c *gin.Context) {
 		fail(c, 400, "server_id 不能为空")
 		return
 	}
+
+	// 自动将服务器号（纯数字）转换为真实 entity_id
+	realServerID, lookupErr := lookupServerNameToEntityID(req.ServerID)
+	if lookupErr != nil {
+		fail(c, 422, "服务器号转换失败: %v", lookupErr)
+		return
+	}
+	serverIDUsed := realServerID
 
 	results := make([]BatchAuthV2Result, len(req.Tokens))
 	for i, tok := range req.Tokens {
@@ -275,13 +361,13 @@ func HandleBatchAuthV2(c *gin.Context) {
 			{
 				name: "PC版",
 				gen: func() ([]byte, error) {
-					return s.Client.GeneratePCRentalGameAuthV2(req.ServerID, clientPublicKey)
+					return s.Client.GeneratePCRentalGameAuthV2(serverIDUsed, clientPublicKey)
 				},
 			},
 			{
 				name: "PE版",
 				gen: func() ([]byte, error) {
-					return s.Client.GenerateRentalGameAuthV2(req.ServerID, clientPublicKey)
+					return s.Client.GenerateRentalGameAuthV2(serverIDUsed, clientPublicKey)
 				},
 			},
 		}
@@ -323,6 +409,10 @@ func HandleBatchAuthV2(c *gin.Context) {
 		"total":      len(results),
 		"ok_count":   okCount,
 		"fail_count": len(results) - okCount,
-		"server_id":  req.ServerID,
+		"server_id":  serverIDUsed,
+		"server_name_lookup": gin.H{
+			"input":   req.ServerID,
+			"resolved": realServerID,
+		},
 	})
 }
