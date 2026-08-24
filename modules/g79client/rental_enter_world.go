@@ -11,6 +11,9 @@ import (
 type RentalServerWorldEntity struct {
 	McserverHost string    `json:"mcserver_host"`
 	McserverPort Uncertain `json:"mcserver_port"`
+	ServerID     string    `json:"server_id"`      // 实际服务器 ID（用于 AuthV2）
+	ServerCode   string    `json:"server_code"`    // 服务器编号
+	Name         string    `json:"name"`           // 服务器名称
 }
 
 type EnterRentalServerResponse struct {
