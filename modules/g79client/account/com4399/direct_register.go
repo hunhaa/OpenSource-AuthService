@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -33,14 +34,18 @@ const (
 )
 
 type DirectRegisterRequest struct {
-	Username string
-	Password string
-	RealName string // 中文姓名
-	IDCard   string // 18 位身份证号
-	Captcha  string // 可选，留空内部自动识别
+	Username  string
+	Password  string
+	RealName  string // 中文姓名
+	IDCard    string // 18 位身份证号
+	Captcha   string // 可选，留空内部自动识别
 	SessionID string // 可选，留空会生成 captchaReq+19 位随机
 	UserAgent string // 可选，留空用随机
 	Transport http.RoundTripper // 可选，代理通过 &http.Transport{Proxy:http.ProxyURL(proxyURL)}
+
+	// 风险重试控制（可选）
+	DisableRiskRetry bool // =true 时遇到「请稍后再试」直接返回，不自动重试
+	MaxRiskRetries   *int // 自定义最大重试次数，nil 用默认 6 次
 }
 
 type DirectRegisterResult struct {
@@ -96,7 +101,11 @@ func newDirectHTTPClient(transport http.RoundTripper, withJar bool) *http.Client
 	// 注意：接口值 i != nil 不代表底层指针不是 nil（典型陷阱：var t *http.Transport = nil；rt http.RoundTripper = t；此时 rt != nil 但 *t 为空）
 	// 这里必须额外判断，否则 http.Client.Do 会在 (*Transport).alternateRoundTripper 里解引用崩溃。
 	if transport == nil || isNilRoundTripper(transport) {
+		// 关键：未指定 transport 时，使用系统环境变量代理（HTTPS_PROXY / HTTP_PROXY）
+		// 很多部署环境（容器化 / 沙箱 / 本机隧道代理）靠环境变量才能正常出网；
+		// 如果写死 Proxy=nil，直接发起 TCP Dial 会被出口防火墙拦截，导致 10+ 秒超时最后全失败。
 		transport = &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
 			IdleConnTimeout:     30 * time.Second,
 			TLSHandshakeTimeout: 10 * time.Second,
 		}
@@ -154,7 +163,8 @@ func getCaptchaImage(ctx context.Context, httpc *http.Client, ua, sid string) ([
 	return b, nil
 }
 
-// doHTTP 模拟真实浏览器请求，补全标准请求头
+// doHTTP 模拟真实浏览器请求（加载 HTML 文档 / 提交表单场景）
+// 验证码图片下载走 getCaptchaImage 专用函数（Accept=image/* 头）
 func doHTTP(ctx context.Context, httpc *http.Client, method, rawURL, body, ct, ua, referer string) ([]byte, int, http.Header, error) {
 	var rdr io.Reader
 	if body != "" {
@@ -164,8 +174,8 @@ func doHTTP(ctx context.Context, httpc *http.Client, method, rawURL, body, ct, u
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	// === 模拟 Chrome 真实请求头 ===
-	// 通用基础头
+	// === 模拟 Chrome 真实请求头：全部作为 HTML 导航/文档加载 ===
+	// （因为 doHTTP 只用在首页/regFrame/register.do 这些 HTML 场景）
 	req.Header.Set("sec-ch-ua", `"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"`)
 	req.Header.Set("sec-ch-ua-mobile", "?0")
 	req.Header.Set("sec-ch-ua-platform", `"Windows"`)
@@ -173,33 +183,24 @@ func doHTTP(ctx context.Context, httpc *http.Client, method, rawURL, body, ct, u
 	if ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}
-	// Accept 族
-	if ct == "application/x-www-form-urlencoded" || method == http.MethodPost {
-		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-	} else {
-		req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-	}
+	// Accept：HTML 文档/导航场景（首页/regFrame/register 返回都是 HTML，或提交表单后返回 HTML）
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
-	// 安全相关
 	if referer != "" {
 		req.Header.Set("Referer", referer)
 	}
+	// Sec-Fetch：全部是 navigate/document（导航到页面 / 提交表单后跳页）
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Sec-Fetch-Dest", "document")
 	if method == http.MethodPost {
 		req.Header.Set("Origin", "https://ptlogin.4399.com")
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-		req.Header.Set("Sec-Fetch-Mode", "navigate")
-		req.Header.Set("Sec-Fetch-User", "?1")
-		req.Header.Set("Sec-Fetch-Dest", "document")
-	} else {
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-		req.Header.Set("Sec-Fetch-Mode", "no-cors")
-		req.Header.Set("Sec-Fetch-Dest", "image")
 	}
 	if ct != "" {
 		req.Header.Set("Content-Type", ct)
 	}
-	// Connection
 	req.Header.Set("Connection", "keep-alive")
 
 	resp, err := httpc.Do(req)
@@ -225,7 +226,16 @@ func jitterSleep(baseMs int) {
 
 // ---------- 注册 ----------
 
+const (
+	maxDirectPleaseWaitRetries = 6          // 「请稍后再试」的最大重试次数
+	directPleaseWaitRetryDelay = 5 * time.Second // 每次重试等待时间（与 WebRegister 保持一致）
+)
+
 // DirectRegister 执行轻量 ptlogin 直接注册
+// 内置「请稍后再试」自动重试：5 秒间隔 × 最多 6 次，共约 30 秒
+// 关键：每次「请稍后再试」重试都会重新创建 Transport，强制更换出口 IP（通过本地隧道重新 CONNECT）。
+// 如果用户传的是 ProxyAddr 格式字符串（推荐），这里会直接解析并每次新建；
+// 如果用户传的是 Transport，且底层类型是 *http.Transport，则浅拷贝一份配置换实例（避免复用连接池）。
 func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectRegisterResult, error) {
 	if req == nil {
 		return nil, errors.New("com4399: DirectRegisterRequest 为空")
@@ -234,7 +244,7 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 		return nil, fmt.Errorf("%w: username %q 不合法（3-20 位字母数字下划线/@）", ErrInvalidRegisterInput, req.Username)
 	}
 	if !registerPasswordPattern.MatchString(req.Password) {
-		return nil, fmt.Errorf("%w: password 不合法（6-20 位）", ErrInvalidRegisterInput)
+		return nil, fmt.Errorf("%w: password 不合法（6-20 位）", ErrInvalidRegisterInput, req.Username)
 	}
 	if !registerIDCardPattern.MatchString(req.IDCard) {
 		return nil, fmt.Errorf("%w: idcard %q 不合法（15/18 位身份证号）", ErrInvalidRegisterInput, req.IDCard)
@@ -243,6 +253,95 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 		return nil, fmt.Errorf("%w: realname 不能为空", ErrInvalidRegisterInput)
 	}
 
+	// 外层重试循环：处理「请稍后再试」风控
+	var lastResult *DirectRegisterResult
+	var lastErr error
+
+	// 根据 req 配置决定重试次数
+	maxRetries := maxDirectPleaseWaitRetries
+	if req.DisableRiskRetry {
+		maxRetries = 0
+	} else if req.MaxRiskRetries != nil {
+		if *req.MaxRiskRetries < 0 {
+			maxRetries = 0
+		} else {
+			maxRetries = *req.MaxRiskRetries
+		}
+	}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		// ========================================================
+		//  每次重试都克隆一次请求 + 新建 Transport（避免复用连接池导致同一出口IP）
+		// ========================================================
+		attemptReq := *req
+		if req.Transport != nil {
+			switch t := req.Transport.(type) {
+			case *http.Transport:
+				if t != nil {
+					// 只拷贝关键字段（和 proxy_chain.go 中设置的保持一致），新建实例换连接池
+					newT := &http.Transport{
+						Proxy:                 t.Proxy,
+						ProxyConnectHeader:    t.ProxyConnectHeader.Clone(),
+						IdleConnTimeout:       t.IdleConnTimeout,
+						TLSHandshakeTimeout:   t.TLSHandshakeTimeout,
+						ResponseHeaderTimeout: t.ResponseHeaderTimeout,
+						ExpectContinueTimeout: t.ExpectContinueTimeout,
+						ForceAttemptHTTP2:     t.ForceAttemptHTTP2,
+					}
+					// DialContext 直接复用（DialContext 是函数不是连接池状态，新 Transport 仍能正常拨号）
+					if t.DialContext != nil {
+						newT.DialContext = t.DialContext
+					}
+					attemptReq.Transport = newT
+				}
+			default:
+				// 其他 RoundTripper 实现，无法克隆——直接复用（用户自定义的特殊情况）
+				attemptReq.Transport = req.Transport
+			}
+		}
+
+		lastResult, lastErr = directRegisterOnce(ctx, &attemptReq)
+
+		// 只有「请稍后再试」才触发自动重试，其他错误直接返回
+		if lastErr == nil || !errors.Is(lastErr, ErrRiskControlTriggered) {
+			return lastResult, lastErr
+		}
+		if lastResult != nil && lastResult.DisplayMessage != "请稍后再试" {
+			// 其他类型的风控（如身份证频繁、实名频繁）不重试
+			return lastResult, lastErr
+		}
+		if attempt >= maxRetries {
+			break
+		}
+		log.Printf("[4399-Direct] 请稍后再试 第%d/%d次，等待%v后重试…",
+			attempt+1, maxDirectPleaseWaitRetries, directPleaseWaitRetryDelay)
+		if !sleepCtx(ctx, directPleaseWaitRetryDelay) {
+			return nil, ctx.Err()
+		}
+	}
+	return lastResult, lastErr
+}
+
+// sleepCtx 可中断的 sleep
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// directRegisterOnce 执行一次完整的注册流程（不包含外层重试）
+func directRegisterOnce(ctx context.Context, req *DirectRegisterRequest) (*DirectRegisterResult, error) {
 	ua := req.UserAgent
 	if ua == "" {
 		ua = randomUserAgent()
@@ -266,9 +365,40 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 	_ = step0Start
 
 	// 0a) 访问首页（获取 PVID / track 等 cookies，建立 referer 链）
-	if _, _, _, err := doHTTP(ctx, httpc, http.MethodGet, "https://www.4399.com/", "", "", ua, ""); err == nil {
-		jitterSleep(600 + mrand.IntN(500))
-	}
+	//     首次导航没有来源，Sec-Fetch-Site 应该是 none，不是 same-origin
+	func() {
+		u := "https://www.4399.com/"
+		rq, e1 := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if e1 != nil {
+			log.Printf("[4399-Direct] 首页预热 NewRequest 失败: %v", e1)
+			return
+		}
+		rq.Header.Set("sec-ch-ua", `"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"`)
+		rq.Header.Set("sec-ch-ua-mobile", "?0")
+		rq.Header.Set("sec-ch-ua-platform", `"Windows"`)
+		rq.Header.Set("Upgrade-Insecure-Requests", "1")
+		rq.Header.Set("User-Agent", ua)
+		rq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		rq.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		rq.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		// 首次导航无来源：Sec-Fetch-Site=none
+		rq.Header.Set("Sec-Fetch-Site", "none")
+		rq.Header.Set("Sec-Fetch-Mode", "navigate")
+		rq.Header.Set("Sec-Fetch-User", "?1")
+		rq.Header.Set("Sec-Fetch-Dest", "document")
+		rq.Header.Set("Connection", "keep-alive")
+		rp, e2 := httpc.Do(rq)
+		if e2 != nil {
+			log.Printf("[4399-Direct] 首页预热请求失败: %v", e2)
+			return
+		}
+		defer rp.Body.Close()
+		io.Copy(io.Discard, rp.Body)
+		if rp.StatusCode != 200 {
+			log.Printf("[4399-Direct] 首页预热 status=%d (非200，可能被代理拦截)", rp.StatusCode)
+		}
+	}()
+	jitterSleep(600 + mrand.IntN(500))
 
 	// 0b) 访问注册框架页 regFrame.do（这是浏览器真实加载顺序，必须先执行）
 	//     这一步会种下 q_c_uid、4399_cn_firsttime、session 关联等关键 cookie
@@ -277,9 +407,11 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 	if rfErr != nil || rfStatus != 200 {
 		log.Printf("[4399-Direct] 注册框架页预热失败 status=%d err=%v （继续尝试注册）", rfStatus, rfErr)
 	} else {
+		log.Printf("[4399-Direct] 注册框架页预热 OK status=%d body=%d bytes", rfStatus, len(rfBody))
 		// 提取页面中的 captcha_id（有的版本 regFrame.do 会返回内嵌 captchaId）
 		if match := captchaIDRegexp.FindSubmatch(rfBody); len(match) >= 2 && req.SessionID == "" {
 			sid = string(match[1])
+			log.Printf("[4399-Direct] 从 regFrame 提取 captchaId=%s", sid)
 		}
 	}
 	jitterSleep(800 + mrand.IntN(800))
@@ -399,6 +531,8 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 		return nil, err
 	}
 	html := string(body)
+	// Debug：每次都保存完整 HTML 到 /tmp 以便分析
+	_ = os.WriteFile("/tmp/com4399_register_last.html", body, 0644)
 
 	msg := extractHTMLMessage(html)
 	res := &DirectRegisterResult{
@@ -427,8 +561,8 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 	case strings.Contains(html, "该姓名身份证提交验证过于频繁"):
 		res.DisplayMessage = "该姓名身份证提交验证过于频繁"
 		return res, ErrRiskControlTriggered
-	case strings.Contains(html, "身份证异常或错误"), strings.Contains(html, "您的身份证异常或错误"):
-		res.DisplayMessage = "您的身份证异常或错误"
+	case strings.Contains(html, "wrong idcard"), strings.Contains(html, "身份证异常或错误"), strings.Contains(html, "您的身份证异常或错误"):
+		res.DisplayMessage = "身份证异常或错误(wrong idcard)"
 		return res, ErrRealNameRejected
 	case strings.Contains(html, "姓名身份证不匹配"):
 		res.DisplayMessage = "姓名身份证不匹配"
@@ -447,7 +581,9 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 			msg = preview(html)
 		}
 		res.DisplayMessage = fmt.Sprintf("未知响应(status=%d): %s", status, msg)
-		log.Printf("[DEBUG] DirectRegister 未知响应 前500字符: %s", preview(html))
+		// Debug：把完整 HTML 保存到 /tmp 以便分析
+		_ = os.WriteFile("/tmp/com4399_register_last.html", body, 0644)
+		log.Printf("[DEBUG] DirectRegister 未知响应 前500字符: %s  (完整HTML已保存到 /tmp/com4399_register_last.html)", preview(html))
 		return res, ErrRegisterRejected
 	}
 	return res, nil
