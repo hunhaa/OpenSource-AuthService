@@ -765,6 +765,7 @@ async function regbotStart(){
   const useDirect = document.getElementById("rb-use-direct").checked;
   const genSauth = document.getElementById("rb-gen-sauth").checked;
   const useProxy = document.getElementById("rb-use-proxy").checked;
+  const proxyMode = document.getElementById("rb-proxy-mode").value;
 
   if(count<=0){ toast("注册数量需 ≥1","err"); return; }
   regbotLastResults = [];
@@ -774,7 +775,8 @@ async function regbotStart(){
   progress.classList.remove("hidden");
   document.getElementById("rb-progress-fill").style.width = "2%";
   document.getElementById("rb-progress-text").textContent = `注册中… 0 / ${count}`;
-  setMsg("rb-msg", `批量注册中（${count} 个，并发 ${conc}）…`, "");
+  const proxyModeText = proxyMode === "short_term" ? "短效动态" : "隧道";
+  setMsg("rb-msg", `批量注册中（${count} 个，并发 ${conc}，${proxyModeText}代理）…`, "");
   document.getElementById("rb-start").disabled = true;
   document.getElementById("rb-stop").disabled = false;
 
@@ -789,6 +791,7 @@ async function regbotStart(){
         password, delay_sec:delay,
         use_direct:useDirect, gen_sauth:genSauth,
         use_proxy_per_task:useProxy,
+        proxy_mode:proxyMode,
       }),
       signal: regbotAbortCtrl.signal,
     });

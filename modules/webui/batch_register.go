@@ -364,6 +364,7 @@ type BatchRegisterReq struct {
 	UseDirect       bool   `json:"use_direct"` // true=轻量ptlogin.register.do，false=走原 OAuth 流程
 	GenSauth        bool   `json:"gen_sauth"`  // 是否生成 sauth cookie
 	UseProxyPerTask bool   `json:"use_proxy_per_task"`
+	ProxyMode       string `json:"proxy_mode"` // short_term=短效动态（每任务绑定一个IP）, tunnel=隧道（每次请求换IP）
 }
 
 type BatchRegisterResultItem struct {
@@ -435,6 +436,9 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 		Status:    "error",
 	}
 
+	// 根据代理模式决定行为
+	// short_term（短效动态）：任务开始时取一个代理，整个流程（含重试）都用同一个IP，只有代理被标记为 dead 时才换
+	// tunnel（隧道）：每次请求都换一个新的代理（后端自动轮换）
 	var transport *http.Transport
 	var proxyOK bool
 	if req.UseProxyPerTask {
@@ -453,12 +457,37 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 		default:
 		}
 
-		// 每次重试都换新代理（如果启用了代理池）
+		// 根据代理模式处理重试时的代理切换
 		if attempt > 0 && req.UseProxyPerTask {
-			newTr, ok2 := refreshProxy(transport)
-			if ok2 {
-				transport = newTr
-				item.ProxyUsed = currentProxyFromTransport(transport)
+			if req.ProxyMode == "tunnel" {
+				// 隧道模式：每次重试都换新代理
+				newTr, ok2 := refreshProxy(transport)
+				if ok2 {
+					transport = newTr
+					item.ProxyUsed = currentProxyFromTransport(transport)
+				}
+			} else {
+				// 短效动态模式：重试时不换代理，保持同一个IP完成整个注册流程
+				// 只有当代理被标记为 dead 时才换下一个
+				if item.ProxyUsed != "" {
+					proxyMu.RLock()
+					isDead := false
+					for _, p := range proxyPool {
+						if p.URL.Host == item.ProxyUsed && p.Dead {
+							isDead = true
+							break
+						}
+					}
+					proxyMu.RUnlock()
+					// 代理已死，换下一个
+					if isDead {
+						newTr, ok2 := refreshProxy(transport)
+						if ok2 {
+							transport = newTr
+							item.ProxyUsed = currentProxyFromTransport(transport)
+						}
+					}
+				}
 			}
 		}
 

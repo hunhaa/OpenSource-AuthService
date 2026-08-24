@@ -190,9 +190,20 @@
           <span>生成 SAuth Cookie (注册后自动登录拿)</span>
         </label>
         <label class="switch">
-          <input id="rb-use-proxy" type="checkbox">
-          <span>每任务轮换代理（需先上传代理池）</span>
+          <input id="rb-use-proxy" type="checkbox" checked>
+          <span>使用代理池（需先上传代理池）</span>
         </label>
+        <div class="proxy-mode-selector">
+          <label>代理模式：</label>
+          <select id="rb-proxy-mode">
+            <option value="short_term" selected>短效动态代理（每任务绑定一个IP，整个流程用同一IP）</option>
+            <option value="tunnel">隧道代理（每次请求自动换IP）</option>
+          </select>
+          <div class="hint small" style="margin-top:4px">
+            💡 <strong>短效动态</strong>：适合1000个IP的代理池，每个注册任务独占一个IP，避免中途换IP触发风控<br>
+            💡 <strong>隧道代理</strong>：适合隧道入口，后端自动轮换IP，无需管理代理列表
+          </div>
+        </div>
       </div>
     </section>
 

@@ -174,3 +174,13 @@ button.small{font-size:12px;padding:7px 12px}
 .regbot-result-detail{display:flex;gap:12px;flex-wrap:wrap;color:var(--sub);font-size:12px}
 .regbot-result-detail > span{display:inline-flex;gap:4px;align-items:center}
 .regbot-result-actions{display:flex;gap:6px;flex-shrink:0}
+
+.proxy-mode-selector{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.proxy-mode-selector label{font-size:13px;color:var(--sub);font-weight:600}
+.proxy-mode-selector select{
+  background:#0c1220;border:1px solid var(--line);color:var(--text);
+  padding:8px 12px;border-radius:8px;font-size:13px;outline:none;
+  cursor:pointer;transition:.15s;
+}
+.proxy-mode-selector select:focus{border-color:var(--brand2);box-shadow:0 0 0 3px rgba(78,167,255,.16)}
+.proxy-mode-selector select:hover{border-color:var(--brand2)}
