@@ -74,18 +74,19 @@ func randomBytes(length int) ([]byte, error) {
 	return b, nil
 }
 
-// HTTP加密 - 严格按照nethard-core TypeScript版本实现
-// 格式: AES-128-CBC( body + "\n" + 16位随机字符 + 零填充至16字节倍数 )
-//       输出: 16字节随机IV + 密文 + 1字节标记 (index<<4 | V4)
+// HTTP加密 - AES-128-CBC，与原始 g79client (UCKETX/g79client) 一致
+// 格式: AES-128-CBC( body + 16位随机字符 + 零填充至16字节倍数 )
+// 输出: 16字节IV + 密文 + 1字节标记 (index<<4 | V12)
+// 注意: AuthServer (/authentication-v2) 只接受 V12 (0x0C) 标识；
+//       V4 (0x04) 会导致服务端解密失败返回 500。
 func G79HttpEncrypt(body []byte) ([]byte, error) {
-	// 16位随机字母数字填充
+	// 16位随机字母数字填充（直接跟在 body 后面，无换行分隔）
 	randFill, err := randomString(16)
 	if err != nil {
 		return nil, err
 	}
-	// TypeScript: `${bodyIn}\n${randFill}`
+	// 原始格式: body + randFill(16) + 零填充
 	unpadded := append([]byte{}, body...)
-	unpadded = append(unpadded, '\n')
 	unpadded = append(unpadded, []byte(randFill)...)
 
 	// 填充至16字节倍数，补0
@@ -96,18 +97,19 @@ func G79HttpEncrypt(body []byte) ([]byte, error) {
 	padded := make([]byte, paddedLen)
 	copy(padded, unpadded)
 
-	// 标记位: 随机index 0..13 << 4 | V4(0x04)
-	index, err := rand.Int(rand.Reader, big.NewInt(14)) // exclusive upper bound 14 => 0..13
+	// 标记位: 随机index 0..14 << 4 | V12(0x0C)
+	index, err := rand.Int(rand.Reader, big.NewInt(15))
 	if err != nil {
 		return nil, err
 	}
-	flag := byte((index.Int64() << 4) | 0x04)
+	flag := byte((index.Int64() << 4) | 0x0C)
 
-	// 16字节随机IV
-	iv := make([]byte, 16)
-	if _, err := rand.Read(iv); err != nil {
+	// 16字节IV（使用 ASCII 随机字符，与原始实现一致）
+	ivStr, err := randomString(16)
+	if err != nil {
 		return nil, err
 	}
+	iv := []byte(ivStr)
 
 	keyIndex := (flag >> 4) & 0x0F
 	keyBytes, err := hex.DecodeString(keys[keyIndex])
@@ -129,7 +131,9 @@ func G79HttpEncrypt(body []byte) ([]byte, error) {
 	return out, nil
 }
 
-// HTTP解密 - 严格按照nethard-core TypeScript版本实现
+// HTTP解密 - 兼容 V12 和 V4 格式
+// V12: plaintext = body + randfill(16) + zeros → 去零填充 → 去16字节randfill → body
+// V4:  plaintext = body + '\n' + randfill(16) + zeros → 去零填充 → 去16字节randfill → body + '\n'
 func G79HttpDecrypt(payload []byte) ([]byte, error) {
 	if len(payload) < aes.BlockSize+2 { // 16 IV + 至少1字节数据 + 1字节flag
 		return nil, fmt.Errorf("payload too short")
