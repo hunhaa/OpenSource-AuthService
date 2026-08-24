@@ -88,6 +88,7 @@ type EnterReq struct {
 type AuthV2Req struct {
 	Token    string `json:"token"`
 	ServerID string `json:"server_id"`
+	Password string `json:"password"` // 租赁服密码（可选，有密码的服需要）
 }
 
 // ---------- helpers ----------
@@ -478,14 +479,51 @@ func HandleRentalAuthV2(c *gin.Context) {
 		return
 	}
 
-	// 检查Link状态
+	// ---- 1) 确保 Link + GameStart 已建立 ----
+	s.mu.Lock()
 	if s.LinkConn == nil {
-		fail(c, 400, "未启动Link连接，请先调用 /link/start 建立连接并完成GameStart")
+		svc, err := linkconnection.NewLinkConnectionService(s.Client)
+		if err != nil {
+			s.mu.Unlock()
+			fail(c, 500, "创建Link服务失败: %v", err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		conn, err := svc.Dial(ctx)
+		if err != nil {
+			s.mu.Unlock()
+			fail(c, 504, "Link连接失败: %v", err)
+			return
+		}
+		if err := conn.SendGameStart(nil); err != nil {
+			conn.Close()
+			s.mu.Unlock()
+			fail(c, 500, "Link SendGameStart失败: %v", err)
+			return
+		}
+		s.LinkConn = conn
+		s.LinkClose = func() {
+			defer func() { _ = recover() }()
+			conn.Close()
+		}
+	}
+	s.mu.Unlock()
+
+	// ---- 2) EnterRentalServerWorld（绑定租赁服会话） ----
+	enter, err := s.Client.EnterRentalServerWorld(req.ServerID, req.Password)
+	if err != nil {
+		fail(c, 500, "EnterRentalServerWorld失败: %v", err)
 		return
 	}
+	if enter.Code != 0 {
+		fail(c, 422, "进入租赁服失败 code=%d msg=%s", enter.Code, enter.Message)
+		return
+	}
+	e := enter.Entity
+	mcAddr := fmt.Sprintf("%s:%v", e.McserverHost, e.McserverPort.String())
 
-	// 两种字段组合依次尝试：先 PC 版（os=windows patchVersion空），失败再试 PE 版（os=android）
-	// 两种变体同时尝试可以覆盖不同服务器类型对字段的要求
+	// ---- 3) 生成并发送 AuthV2（先 PC 后 PE） ----
 	type variant struct {
 		name string
 		gen  func() ([]byte, error)
@@ -505,15 +543,11 @@ func HandleRentalAuthV2(c *gin.Context) {
 		},
 	}
 
-	var firstErr error
 	var lastErr error
 	for vi, v := range variants {
 		data, gerr := v.gen()
 		if gerr != nil {
 			lastErr = fmt.Errorf("[%s] 生成AuthV2失败: %w", v.name, gerr)
-			if firstErr == nil {
-				firstErr = lastErr
-			}
 			continue
 		}
 		chainInfo, aerr := s.Client.SendAuthV2Request(data)
@@ -524,17 +558,16 @@ func HandleRentalAuthV2(c *gin.Context) {
 				"chain_info_b64":  encodeB64(chainInfo),
 				"chain_info_hex":  hex.EncodeToString(chainInfo),
 				"chain_info_len":  len(chainInfo),
+				"mc_addr":         mcAddr,
+				"mc_host":         e.McserverHost,
+				"mc_port":         e.McserverPort.String(),
 			})
 			return
 		}
 		lastErr = fmt.Errorf("[%s] AuthV2请求失败: %w", v.name, aerr)
-		if firstErr == nil {
-			firstErr = lastErr
-		}
 		_ = vi
 	}
 
-	// 两种都失败，返回最后一个的详细错误（含汇总表），并在开头说明两种都试过了
 	fail(c, 502, "AuthV2两种字段组合均失败。%v", lastErr)
 }
 
