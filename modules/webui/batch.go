@@ -103,6 +103,7 @@ type BatchEnterResult struct {
 	Token    string `json:"token"`
 	Status   string `json:"status"` // "ok" / "error"
 	IP       string `json:"ip,omitempty"`
+	ServerID string `json:"server_id,omitempty"` // 实际服务器 ID（UUID），用于后续 AuthV2
 	Error    string `json:"error,omitempty"`
 }
 
@@ -281,6 +282,7 @@ func HandleBatchEnter(c *gin.Context) {
 		}
 		e := resp.Entity
 		r.IP = fmt.Sprintf("%s:%v", e.McserverHost, e.McserverPort.String())
+		r.ServerID = e.ServerID // 保存实际服务器 ID（UUID），用于后续 AuthV2
 		r.Status = "ok"
 		if r.Error != "" {
 			r.Error = strings.TrimSpace(r.Error)
