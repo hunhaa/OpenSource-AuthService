@@ -302,7 +302,7 @@ type BatchRegisterResultItem struct {
 }
 
 func generateUsername(prefix string, i int) string {
-	suffix := account4399RandomString(7)
+	suffix := account4399RandomString(5)
 	u := fmt.Sprintf("%s%s%03d", prefix, suffix, i)
 	if len(u) > 20 {
 		u = u[:20]
