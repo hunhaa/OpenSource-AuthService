@@ -172,13 +172,31 @@ var (
 	proxyIpPortRegex = regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})$`)
 )
 
-// parseProxyString 解析 "127.0.0.1:8080" / "user:pass@127.0.0.1:8080" / "http(s)://..."
+// parseProxyString 解析代理字符串，支持以下格式：
+//   1) "127.0.0.1:8080"
+//   2) "user:pass@127.0.0.1:8080"
+//   3) "IP:PORT:USER:PASS"  (四段格式，蚂蚁/品易云/快代理等常见格式)
+//   4) "http(s)://user:pass@ip:port" / "socks5://..."
 func parseProxyString(s string) (*proxyEntry, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
 	}
 	hasScheme := strings.Contains(s, "://")
+	hasAt := strings.Contains(s, "@")
+
+	// 格式 3: IP:PORT:USER:PASS (无 @，无 ://，冒号=3个)
+	if !hasScheme && !hasAt {
+		parts := strings.Split(s, ":")
+		if len(parts) == 4 {
+			ip, portPart, user, pass := parts[0], parts[1], parts[2], parts[3]
+			if _, err := strconv.Atoi(portPart); err == nil && net.ParseIP(ip) != nil {
+				s = fmt.Sprintf("http://%s:%s@%s:%s",
+					url.QueryEscape(user), url.QueryEscape(pass), ip, portPart)
+				hasScheme = true
+			}
+		}
+	}
 	if !hasScheme {
 		s = "http://" + s
 	}
@@ -980,17 +998,18 @@ func HandleCheckProxies(c *gin.Context) {
 			defer func() { <-sem }()
 			r := proxyCheckResult{Proxy: raw}
 			t0 := time.Now()
-			// 构造 proxy url
-			uStr := raw
-			if !strings.Contains(uStr, "://") {
-				uStr = "http://" + uStr
-			}
-			u, perr := url.Parse(uStr)
-			if perr != nil {
-				r.Error = "parse: " + perr.Error()
+			// 走统一 parseProxyString，支持 IP:PORT:USER:PASS 四段格式
+			pe, perr := parseProxyString(raw)
+			if perr != nil || pe == nil {
+				if perr != nil {
+					r.Error = "parse: " + perr.Error()
+				} else {
+					r.Error = "parse: empty proxy"
+				}
 				results[i] = r
 				return
 			}
+			u := pe.URL
 			client := &http.Client{
 				Timeout: time.Duration(body.Timeout) * time.Second,
 				Transport: &http.Transport{
