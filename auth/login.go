@@ -40,12 +40,8 @@ func ensureUserDetail(cli *g79.Client, nicknamePrefix string) error {
 		cli.UserDetail = &detail.Entity
 	}
 	if cli.UserDetail != nil && cli.UserDetail.Name == "" {
-		prefix := nicknamePrefix
-		if prefix == "" {
-			prefix = "HZ"
-		}
-		name := fmt.Sprintf("%s%08d", prefix, random.Intn(1000000))
-		if err := cli.UpdateNickname(name); err != nil {
+		// 辅助账号没有名字：先按 nklm_XXXXX 命名；若传了 legacyPrefix，会在冲突重试时兜底
+		if err := g79.EnsureNicknameNKLMIfEmpty(cli, nicknamePrefix); err != nil {
 			return fmt.Errorf("UpdateNickname: %w", err)
 		}
 	}

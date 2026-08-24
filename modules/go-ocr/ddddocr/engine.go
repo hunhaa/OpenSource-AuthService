@@ -146,7 +146,14 @@ func (e *Engine) Detect(img image.Image) ([]DetResult, error) {
 }
 
 func (e *Engine) preprocessOCR(img image.Image) ([]float32, []int64, error) {
-	targetH := 64
+	var targetH int
+	if e.useCustomModel {
+		// boluoreg 4399ocr.json: image = [-1, 32]  (H=32, W 动态)
+		targetH = 32
+	} else {
+		// 官方 ddddocr 模型: H=64
+		targetH = 64
+	}
 	dstImg := imageutil.Resize(img, 0, targetH)
 	targetW := dstImg.Bounds().Dx()
 
@@ -154,19 +161,19 @@ func (e *Engine) preprocessOCR(img image.Image) ([]float32, []int64, error) {
 	inputData := make([]float32, 1*1*targetH*targetW)
 
 	for y := 0; y < targetH; y++ {
-		for x := 0; x < targetW; x++ {
-			pix := grayImg.Pix[y*grayImg.Stride+x]
-			normalized := float32(pix) / 255.0
+			for x := 0; x < targetW; x++ {
+				pix := grayImg.Pix[y*grayImg.Stride+x]
+				normalized := float32(pix) / 255.0
 
-			if e.useCustomModel {
-				// 自定义模型：mean=0.456, std=0.224
-				inputData[y*targetW+x] = (normalized - 0.456) / 0.224
-			} else {
-				// 官方模型：mean=0.5, std=0.5
-				inputData[y*targetW+x] = (normalized - 0.5) / 0.5
+				if e.useCustomModel {
+					// ddd-trainer / boluoreg 自定义模型：训练预处理 mean=0.456, std=0.224
+					inputData[y*targetW+x] = (normalized - 0.456) / 0.224
+				} else {
+					// 官方 ddddocr 模型：mean=0.5, std=0.5
+					inputData[y*targetW+x] = (normalized - 0.5) / 0.5
+				}
 			}
 		}
-	}
 
 	shape := []int64{1, 1, int64(targetH), int64(targetW)}
 	return inputData, shape, nil

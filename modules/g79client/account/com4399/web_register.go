@@ -29,8 +29,9 @@ const (
 	webRegisterUserAgent            = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36"
 	webRegisterXRequestedWith       = "mark.via.gp"
 	webRegisterCryptoPassphrase     = "lzYW5qaXVqa"
-	maxWebRegisterPleaseWaitRetries = 0
+	maxWebRegisterPleaseWaitRetries = 6          // 请稍后再试 的重试次数
 	webRegisterRealNameSubmitDelay  = 500 * time.Millisecond
+	webRegisterPleaseWaitRetryDelay = 5 * time.Second // 每次请稍后再试后的等待时间（之前是 2s，太短会被再次限流）
 )
 
 var (
@@ -39,6 +40,7 @@ var (
 	ErrRegisterRejected     = errors.New("com4399: register rejected")
 	ErrRealNameRejected     = errors.New("com4399: real-name rejected")
 	ErrRiskControlTriggered = errors.New("com4399: risk control triggered")
+	ErrCaptchaFailed        = errors.New("com4399: captcha recognition failed (engine missing or wrong code)")
 
 	registerUsernamePattern = regexp.MustCompile(`^[\w@]{3,20}$`)
 	registerPasswordPattern = regexp.MustCompile(`^[\w\.(!@#$%&)]{6,20}$`)
@@ -52,6 +54,21 @@ type WebRegisterRequest struct {
 	RealName    string
 	IDCard      string
 	CaptchaCode string
+	Transport   http.RoundTripper
+}
+
+// sanitizeTransport 识别并抹平 "接口非 nil，内部 *http.Transport 指针为 nil" 的陷阱
+func sanitizeTransport(rt http.RoundTripper) http.RoundTripper {
+	if rt == nil {
+		return nil
+	}
+	switch t := rt.(type) {
+	case *http.Transport:
+		if t == nil {
+			return nil
+		}
+	}
+	return rt
 }
 
 // WebRegisterResult 描述网页版 4399 注册结果。
@@ -115,14 +132,27 @@ func NewWebRegisterClient(httpClient *http.Client) *WebRegisterClient {
 	return &WebRegisterClient{httpClient: httpClient, userAgent: webRegisterUserAgent}
 }
 
+func NewWebRegisterClientWithTransport(rt http.RoundTripper) *WebRegisterClient {
+	rt = sanitizeTransport(rt)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: requestTimeout,
+	}
+	if rt != nil {
+		client.Transport = rt
+	}
+	return &WebRegisterClient{httpClient: client, userAgent: webRegisterUserAgent}
+}
+
 // RegisterWeb 执行网页版 4399 账号注册。
 func RegisterWeb(ctx context.Context, req WebRegisterRequest) (*WebRegisterResult, error) {
-	return NewWebRegisterClient(nil).Register(ctx, req)
+	return NewWebRegisterClientWithTransport(req.Transport).Register(ctx, req)
 }
 
 // RegisterWebCookie 执行网页版 4399 账号注册，然后使用 com4399 登录并返回 Cookie。
 func RegisterWebCookie(ctx context.Context, req WebRegisterRequest) (*WebRegisterCookieResult, error) {
-	client := NewWebRegisterClient(nil)
+	client := NewWebRegisterClientWithTransport(req.Transport)
 	return client.RegisterAndLoginCookie(ctx, req)
 }
 
@@ -161,8 +191,15 @@ func (c *WebRegisterClient) Register(ctx context.Context, req WebRegisterRequest
 		}
 		err = c.submitRegistration(ctx, page, req)
 		for retry := 0; isWebRegisterPleaseWait(err) && retry < maxWebRegisterPleaseWaitRetries; retry++ {
+			log.Printf("[4399注册] 请稍后再试 第%d/%d次，等待%v后重新打开注册页…", retry+1, maxWebRegisterPleaseWaitRetries, webRegisterPleaseWaitRetryDelay)
 			if !waitWebRegisterRetry(ctx) {
 				return nil, ctx.Err()
+			}
+			// 请稍后再试 之后，老的 reg_req_id 已被风控标记，需要重新打开注册页拿新的 reg_req_id / sec
+			newPage, nErr := c.openRegistrationPage(ctx)
+			if nErr == nil {
+				c.pending = nil
+				page = newPage
 			}
 			err = c.submitRegistration(ctx, page, req)
 		}
@@ -210,7 +247,7 @@ func isWebRegisterPleaseWait(err error) bool {
 }
 
 func waitWebRegisterRetry(ctx context.Context) bool {
-	timer := time.NewTimer(2 * time.Second)
+	timer := time.NewTimer(webRegisterPleaseWaitRetryDelay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

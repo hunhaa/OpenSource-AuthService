@@ -102,8 +102,8 @@ func resolveHTTPClient(httpClient *http.Client) *http.Client {
 
 func init() {
 	globalG79PatchMeta = &PatchMetadata{
-		Version:       "3.8.41.296398",
-		ResourcesHash: "ef96df71f1c99d7c93d8d388d67771a8",
+		Version:       "3.9.23.298289",        // 最新Patch版本 (Android 热更 patch_list)
+		ResourcesHash: "6de7bebd5d40b50f01f92d2b6dc9b095", // 3.9.23 对应资源Hash
 	}
 
 	// 在包初始化时尝试预取；失败则忽略，后续调用会再次尝试
@@ -134,6 +134,20 @@ func GetGlobalG79LatestVersion() (string, error) {
 // 	}
 // 	return meta.Version, nil
 // }
+
+// DefaultPatchMetadata 返回当前使用的全局 PatchMetadata（非动态、不触发 HTTP）。
+// 方便统一 CLI 打印版本信息、前端展示。
+func DefaultPatchMetadata() *PatchMetadata {
+	m, err := GetGlobalG79PatchMetadata()
+	if err != nil {
+		// 与 init 里一致，固定值
+		return &PatchMetadata{
+			Version:       "3.9.23.298289",
+			ResourcesHash: "6de7bebd5d40b50f01f92d2b6dc9b095",
+		}
+	}
+	return m
+}
 
 func GetGlobalG79PatchMetadata() (*PatchMetadata, error) {
 	return GetGlobalG79PatchMetadataWithHTTPClient(nil)

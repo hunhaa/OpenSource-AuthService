@@ -181,22 +181,6 @@ func ensureNickname(cli *g79client.Client) error {
 	if cli.UserDetail != nil && strings.TrimSpace(cli.UserDetail.Name) != "" {
 		return nil
 	}
-
-	var lastErr error
-	for i := 0; i < 10; i++ {
-		name := fmt.Sprintf("HZ%08d", nicknameRandom.Intn(100000000))
-		if err := cli.UpdateNickname(name); err != nil {
-			lastErr = err
-			time.Sleep(time.Duration(200+i*100) * time.Millisecond)
-			continue
-		}
-		if cli.UserDetail != nil {
-			cli.UserDetail.Name = name
-		}
-		return nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("unknown error")
-	}
-	return fmt.Errorf("UpdateNickname: auto retry failed: %w", lastErr)
+	// 4399 辅助账号空名时自动改为 nklm_XXXXX，冲突重试内部实现
+	return g79client.EnsureNicknameNKLMIfEmpty(cli, "HZ")
 }

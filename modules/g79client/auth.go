@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -29,14 +30,29 @@ type LoginResponse struct {
 
 // {'HostNum': 200, 'ServerHostNum': 8000, 'TempServerStop': 0, 'CdnUrl': 'https://g79.gdl.netease.com/', 'H5VersionUrl': 'https://g79.update.netease.com/cdnversion/obt_h5version.json', 'SeadraUrl': 'https://pub-api.seadra.netease.com', 'HomeServerUrl': 'https://g79mclobthome.minecraft.cn', 'HomeServerGrayUrl': 'https://g79mclobthomegray.nie.netease.com:9443', 'WebServerUrl': 'https://g79mclobt.minecraft.cn', 'WebServerGrayUrl': 'https://g79mclobtgray.nie.netease.com:9443', 'CoreServerUrl': 'https://g79obtapigtcoregray.minecraft.cn', 'CoreServerGrayUrl': 'https://g79obtapigtcoregray.minecraft.cn', 'TransferServerUrl': 'https://g79.update.netease.com/transferserver_obt_new.list', 'TransferServerHttpUrl': 'https://g79transfernew.nie.netease.com', 'TransferServerNewHttpUrl': 'https://g79mcltransfer.minecraft.cn', 'MomentUrl': 'https://x19-pyq.webcgi.163.com/', 'ForumUrl': 'https://mcpel-web.16163.com', 'AuthServerUrl': 'https://g79authobt.minecraft.cn', 'ChatServerUrl': 'https://x19.update.netease.com/chatserver.list', 'PathNUrl': 'https://impression.update.netease.com/lighten/atlas_x19_hangzhou-{isp}.txt', 'PePathNUrl': 'https://impression.update.netease.com/lighten/atlas_g79_hangzhou-{isp}.txt', 'PathNIpv6Url': 'https://impression.update.netease.com/lighten/x19/cnv6.txt', 'PePathNIpv6Url': 'https://impression.update.netease.com/lighten/g79/cnv6.txt', 'LinkServerUrl': 'https://g79.update.netease.com/linkserver_obt.list', 'ApiGatewayUrl': 'https://g79apigatewayobt.minecraft.cn', 'ApiGatewayWeiXinUrl': 'https://g79apigatewayobtweixin.minecraft.cn', 'ApiGatewayGrayUrl': 'https://g79apigatewaygrayobt.nie.netease.com', 'communityHost': 'https://news-api.16163.com/app/g79/api', 'WelfareUrl': 'https://mc.163.com/pe/client/', 'DCWebUrl': 'https://x19apigatewayobt.nie.netease.com', 'RentalTransferUrl': 'https://mcrealms.update.netease.com/isp_map_production.json', 'MgbSdkUrl': 'https://mgbsdk.matrix.netease.com'}
 type G79ReleaseJSON struct {
-	CoreServerURL            string `json:"CoreServerUrl"`
-	AuthServerURL            string `json:"AuthServerUrl"`
-	WebServerUrl             string `json:"WebServerUrl"`
-	ApiGatewayUrl            string `json:"ApiGatewayUrl"`
-	TransferServerUrl        string `json:"TransferServerUrl"`
-	TransferServerNewHttpUrl string `json:"TransferServerNewHttpUrl"`
-	ChatServerURL            string `json:"ChatServerUrl"`
-	LinkServerURL            string `json:"LinkServerUrl"`
+	CoreServerURL              string `json:"CoreServerUrl"`
+	CoreServerGrayURL          string `json:"CoreServerGrayUrl"`
+	AuthServerURL              string `json:"AuthServerUrl"`
+	AuthServerNewHttpURL       string `json:"AuthServerNewHttpUrl"`
+	WebServerUrl               string `json:"WebServerUrl"`
+	WebServerGrayURL           string `json:"WebServerGrayUrl"`
+	WebServerNewHttpURL        string `json:"WebServerNewHttpUrl"`
+	ApiGatewayUrl              string `json:"ApiGatewayUrl"`
+	ApiGatewayGrayUrl          string `json:"ApiGatewayGrayUrl"`
+	TransferServerUrl          string `json:"TransferServerUrl"`
+	TransferServerHttpUrl      string `json:"TransferServerHttpUrl"`
+	TransferServerNewHttpUrl   string `json:"TransferServerNewHttpUrl"`
+	ChatServerURL              string `json:"ChatServerUrl"`
+	LinkServerURL              string `json:"LinkServerUrl"`
+	RentalTransferURL          string `json:"RentalTransferUrl"`
+	DCWebURL                   string `json:"DCWebUrl"`
+	HomeServerURL              string `json:"HomeServerUrl"`
+	HomeServerGrayURL          string `json:"HomeServerGrayUrl"`
+	MgbSdkUrl                  string `json:"MgbSdkUrl"`
+	ApiGatewayWeiXinUrl        string `json:"ApiGatewayWeiXinUrl"`
+	CommunityHost              string `json:"communityHost"`
+	WelfareUrl                 string `json:"WelfareUrl"`
+	SeadraURL                  string `json:"SeadraUrl"`
 }
 
 type X19ReleaseJSON struct {
@@ -342,7 +358,7 @@ func (c *Client) g79PerformPEAuthWithCookie(sauthData *SauthData, cookieData *Co
 	}
 
 	versionMessage := fmt.Sprintf("%s%s%s%s%s%s", c.EngineVersion, g79LibraryHash, c.G79LatestVersion, c.patchResourcesHash, g79SignatureHash, seed)
-	sign, err := utils.PeAuthSign(versionMessage, 4, 7)
+	sign, err := utils.PeAuthSign(versionMessage, 3, 6) // 3.9 版本参数：sp=3, tr=6
 	if err != nil {
 		return fmt.Errorf("计算签名失败: %w", err)
 	}
@@ -482,7 +498,7 @@ func buildAndroidSauthPayload(sauthData *SauthData, clientLoginSN string) map[st
 func buildAndroidSaDataPayload(c *Client, sauthData *SauthData, cookieData *CookieData) map[string]any {
 	sdkVersion := strings.TrimSpace(sauthData.SDKVersion)
 	if sdkVersion == "" {
-		sdkVersion = "5.9.0"
+		sdkVersion = "5.16.0" // 3.9对应SDK版本
 	}
 	udid := sauthData.UDID
 	if strings.TrimSpace(udid) == "" {
@@ -492,30 +508,34 @@ func buildAndroidSaDataPayload(c *Client, sauthData *SauthData, cookieData *Cook
 	if appChannel == "" {
 		appChannel = "netease"
 	}
+	appVer := c.G79LatestVersion
+	if appVer == "" {
+		appVer = "3.9.23.298289"
+	}
 
 	return map[string]any{
 		"app_channel":   appChannel,
-		"app_ver":       "3.3.15.268037", //c.G79LatestVersion,
+		"app_ver":       appVer,
 		"core_num":      "u0004",
 		"cpu_digit":     "64",
 		"cpu_hz":        "2465600",
 		"cpu_name":      "placeholder",
-		"device_height": "900",
-		"device_model":  "SAMSUNG#SM-G977N",
-		"device_width":  "1600",
+		"device_height": "2400",
+		"device_model":  "Xiaomi#23116PN5BC",
+		"device_width":  "1080",
 		"disk":          "",
 		"emulator":      cookieData.emulatorFlag(),
 		"first_udid":    udid,
 		"is_guest":      cookieData.isGuestFlag(),
 		"launcher_type": "PE_C++",
 		"mac_addr":      cookieData.macAddress(),
-		"network":       "CHANNEL_UNKNOW", //"mm_10086",
+		"network":       "CHANNEL_UNKNOW",
 		"os_name":       "android",
-		"os_ver":        "5.1.1",
+		"os_ver":        "13",
 		"ram":           cookieData.ramValue(),
 		"rom":           cookieData.romValue(),
 		"root":          false,
-		"sdk_ver":       "5.2.0", //sdkVersion,
+		"sdk_ver":       sdkVersion,
 		"start_type":    "default",
 		"udid":          udid,
 	}
@@ -770,11 +790,43 @@ func (c *Client) X19AuthenticateWithCookie(cookieStr string) error {
 
 var OSName = "android"
 
+// looksValidPublicKey 简单校验 clientKey 是否像是一个合法的 ECC P384 SPKI Base64 公钥。
+// 只做格式和长度层面的兜底检查，避免空串/明显乱码进入 AuthV2 造成服务端 500。
+func looksValidPublicKey(clientKey string) error {
+	k := strings.TrimSpace(clientKey)
+	if k == "" {
+		return fmt.Errorf("clientKey 为空")
+	}
+	// ECC P384 SPKI DER 编码通常 base64 后大约 120~180 字符。
+	// 客户端硬编码的那个公钥长度为 120，这里留一个宽松范围。
+	if len(k) < 60 || len(k) > 400 {
+		return fmt.Errorf("clientKey 长度异常 (%d)，应为 ECC P384 SPKI 的 base64", len(k))
+	}
+	// 粗略检查是否为 base64 字符集
+	for _, r := range k {
+		switch {
+		case r >= 'A' && r <= 'Z':
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '+' || r == '/' || r == '=':
+		default:
+			return fmt.Errorf("clientKey 含有非法 base64 字符: %q", string(r))
+		}
+	}
+	return nil
+}
+
 // 生成租赁服认证v2数据
 func (c *Client) GenerateRentalGameAuthV2(serverID, clientKey string) ([]byte, error) {
+	if err := looksValidPublicKey(clientKey); err != nil {
+		return nil, fmt.Errorf("GenerateRentalGameAuthV2: %w", err)
+	}
 	uid, err := c.GetUserIDInt()
 	if err != nil {
 		return nil, err
+	}
+	if c.UserDetail == nil {
+		return nil, fmt.Errorf("UserDetail 为空，请先完成登录并 GetUserDetail")
 	}
 
 	authv2 := map[string]any{
@@ -785,12 +837,43 @@ func (c *Client) GenerateRentalGameAuthV2(serverID, clientKey string) ([]byte, e
 		"netease_sid":   fmt.Sprintf("%s:RentalGame", serverID),
 		"os_name":       OSName,
 		"patchVersion":  c.G79LatestVersion,
+		"platform":      "android",
 		"uid":           uid,
+	}
+	// G79LatestVersion 为空时追加 pcCheck=0，避免某些网关认为字段缺失
+	if strings.TrimSpace(c.G79LatestVersion) == "" {
+		authv2["pcCheck"] = "0"
 	}
 
 	return json.Marshal(authv2)
 }
 
+// 生成PC租赁服认证v2数据（os_name=windows patchVersion空，与PC山头/大厅对应）
+func (c *Client) GeneratePCRentalGameAuthV2(serverID, clientKey string) ([]byte, error) {
+	if err := looksValidPublicKey(clientKey); err != nil {
+		return nil, fmt.Errorf("GeneratePCRentalGameAuthV2: %w", err)
+	}
+	uid, err := c.GetUserIDInt()
+	if err != nil {
+		return nil, err
+	}
+	if c.UserDetail == nil {
+		return nil, fmt.Errorf("UserDetail 为空，请先完成登录并 GetUserDetail")
+	}
+	authv2 := map[string]any{
+		"bit":           "64",
+		"clientKey":     clientKey,
+		"displayName":   c.UserDetail.Name,
+		"engineVersion": c.EngineVersion,
+		"netease_sid":   fmt.Sprintf("%s:RentalGame", serverID),
+		"os_name":       "windows",
+		"patchVersion":  "",
+		"pcCheck":       "0",
+		"platform":      "pc",
+		"uid":           uid,
+	}
+	return json.Marshal(authv2)
+}
 // 生成山头认证v2数据
 func (c *Client) GenerateDomainGameAuthV2(serverID, clientKey string) ([]byte, error) {
 	uid, err := c.GetUserIDInt()
@@ -902,46 +985,280 @@ func (c *Client) GenerateNetworkGameAuthV2(roomID, clientKey string) ([]byte, er
 
 // 发送认证v2请求
 func (c *Client) SendAuthV2Request(authv2Data []byte) ([]byte, error) {
-	api := "/authentication-v2"
+	// 实证定位：G79(OBT) chain-info 认证 v2 接口挂在 AuthServerURL 下 /authentication-v2（无尾斜杠）。
+	// 网易 G79 网关对"不合规请求"可能返回 400/500 空 body，需要靠尝试排序和汇总表定位。
+	// 关键观察：
+	//   - hex body (text/plain/json) → 网关 400（拒绝纯文本 hex）
+	//   - binary body (application/octet-stream) → 服务端 500（能解密/验签，说明 path+body格式 是对的，只剩签名 content 选择问题）
+	// 所以本版策略：强制 BIN 优先，同时尝试两种签名 content：
+	//   signVariant=plain: content = string(authv2Data)   ← 签名基于"明文 JSON"（历史写法）
+	//   signVariant=hex:   content = hexBody              ← 签名基于"加密后的 hex 串"（网关需要的情况）
+	pathCandidates := []string{"/authentication-v2"} // 仅保留无尾斜杠，避免重复
 
 	encryptedData, err := G79HttpEncrypt(authv2Data)
 	if err != nil {
 		return nil, err
 	}
+	hexBody := hex.EncodeToString(encryptedData)
 
-	req, err := http.NewRequest("POST", c.ReleaseJSON.AuthServerURL+api, strings.NewReader(hex.EncodeToString(encryptedData)))
-	if err != nil {
-		return nil, err
+	// signContentVariant 说明：
+	//   "plain" → 用明文 authv2Data 做签名 content
+	//   "hex"   → 用加密后的 hexBody 做签名 content
+	type attempt struct {
+		label            string
+		base             string
+		path             string
+		contentType      string
+		querySuffix      string
+		sendBinary       bool
+		signVariant      string // "plain" or "hex"
+	}
+	candidates := []attempt{}
+	addCandidate := func(label, base, path, ct, qs string, sendBin bool, signVar string) {
+		base = strings.TrimRight(base, "/")
+		if base == "" || path == "" {
+			return
+		}
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		for _, c := range candidates {
+			if c.base == base && c.path == path && c.contentType == ct &&
+				c.querySuffix == qs && c.sendBinary == sendBin && c.signVariant == signVar {
+				return
+			}
+		}
+		fullLabel := label
+		if signVar == "hex" {
+			fullLabel = label + " [sign=hex]"
+		} else {
+			fullLabel = label + " [sign=plain]"
+		}
+		candidates = append(candidates, attempt{
+			label: fullLabel, base: base, path: path, contentType: ct,
+			querySuffix: qs, sendBinary: sendBin, signVariant: signVar,
+		})
 	}
 
-	req.Header.Set("User-Agent", "libhttpclient/1.0.0.0")
-	req.Header.Set("Accept-Encoding", "gzip")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("user-id", c.UserID)
-
-	token := CalculateDynamicToken(api, string(authv2Data), c.UserToken)
-	req.Header.Set("user-token", hex.EncodeToString([]byte(token)))
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+	qs := "" // 预留：?user-id=xxx&ns=RentalGame (后续若需要 query string 就开)
+	for _, p := range pathCandidates {
+		if c.IsX19 {
+			// X19 也同样追加两种签名变体
+			addCandidate("X19 CoreServer", c.X19ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8", qs, false, "plain")
+			addCandidate("X19 CoreServer", c.X19ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8", qs, false, "hex")
+			addCandidate("X19 AuthServer", c.X19ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8", qs, false, "plain")
+			addCandidate("X19 AuthServer", c.X19ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8", qs, false, "hex")
+			addCandidate("X19 ApiGatewayGray", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "text/plain; charset=utf-8", qs, false, "plain")
+			addCandidate("X19 ApiGatewayGray", c.X19ReleaseJSON.ApiGatewayGrayURL, p, "text/plain; charset=utf-8", qs, false, "hex")
+			addCandidate("X19 AuthServerCpp", c.X19ReleaseJSON.AuthServerCppURL, p, "text/plain; charset=utf-8", qs, false, "plain")
+			addCandidate("X19 AuthServerCpp", c.X19ReleaseJSON.AuthServerCppURL, p, "text/plain; charset=utf-8", qs, false, "hex")
+			addCandidate("X19 CoreServer(application/json)", c.X19ReleaseJSON.CoreServerURL, p, "application/json", qs, false, "plain")
+			addCandidate("X19 CoreServer(application/json)", c.X19ReleaseJSON.CoreServerURL, p, "application/json", qs, false, "hex")
+		} else {
+			// ── G79 租赁服 chain-info：按"最有可能成功"的优先级排序 ──
+			// 第1梯队：AuthServer + BIN（实证能走到服务端 500，只差签名 content）
+			addCandidate("G79 AuthServer(binary)", c.ReleaseJSON.AuthServerURL, p, "application/octet-stream", qs, true, "plain")
+			addCandidate("G79 AuthServer(binary)", c.ReleaseJSON.AuthServerURL, p, "application/octet-stream", qs, true, "hex")
+			// 第2梯队：AuthServer + text/plain hex body（网关多数直接 400，但作为兜底）
+			addCandidate("G79 AuthServer", c.ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8", qs, false, "plain")
+			addCandidate("G79 AuthServer", c.ReleaseJSON.AuthServerURL, p, "text/plain; charset=utf-8", qs, false, "hex")
+			// 第3梯队：AuthServer + application/json hex body
+			addCandidate("G79 AuthServer(json)", c.ReleaseJSON.AuthServerURL, p, "application/json", qs, false, "plain")
+			addCandidate("G79 AuthServer(json)", c.ReleaseJSON.AuthServerURL, p, "application/json", qs, false, "hex")
+			// 第4梯队：ApiGateway + BIN（备用网关）
+			addCandidate("G79 ApiGateway(binary)", c.ReleaseJSON.ApiGatewayUrl, p, "application/octet-stream", qs, true, "plain")
+			addCandidate("G79 ApiGateway(binary)", c.ReleaseJSON.ApiGatewayUrl, p, "application/octet-stream", qs, true, "hex")
+			// 第5梯队：ApiGatewayGray（灰度网关）
+			addCandidate("G79 ApiGatewayGray", c.ReleaseJSON.ApiGatewayGrayUrl, p, "text/plain; charset=utf-8", qs, false, "plain")
+			addCandidate("G79 ApiGatewayGray", c.ReleaseJSON.ApiGatewayGrayUrl, p, "text/plain; charset=utf-8", qs, false, "hex")
+			// 第6梯队：CoreServer（历史路径，基本 404）
+			addCandidate("G79 CoreServer", c.ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8", qs, false, "plain")
+			addCandidate("G79 CoreServer", c.ReleaseJSON.CoreServerURL, p, "text/plain; charset=utf-8", qs, false, "hex")
+			// 第7梯队：x-www-form-urlencoded（极端兼容兜底）
+			addCandidate("G79 AuthServer(form)", c.ReleaseJSON.AuthServerURL, p, "application/x-www-form-urlencoded", qs, false, "plain")
+			addCandidate("G79 AuthServer(form)", c.ReleaseJSON.AuthServerURL, p, "application/x-www-form-urlencoded", qs, false, "hex")
+		}
 	}
-	defer resp.Body.Close()
 
-	respBody, err := readResponseBody(resp)
-	if err != nil {
-		return nil, err
+	// 记录每次尝试的结果，便于汇总
+	type tryResult struct {
+		idx    int
+		label  string
+		status int
+		url    string
+		ct     string
+		bin    bool
+		signV  string
+	}
+	var results []tryResult
+	var bestErr error
+	bestErrScore := -99999
+	scoreStatus := func(status int) int {
+		switch {
+		case status == 200:
+			return 10000
+		case status >= 500:
+			return 800 + status
+		case status == 401 || status == 403:
+			return 600 + status
+		case status == 400:
+			return 400 + status
+		case status == 404:
+			return 100
+		case status == 0:
+			return -1
+		default:
+			return 300 + status
+		}
+	}
+	setBestErr := func(err error, status int) {
+		score := scoreStatus(status)
+		if score > bestErrScore {
+			bestErrScore = score
+			bestErr = err
+		}
 	}
 
-	encryptedResp, err := hex.DecodeString(string(respBody))
-	if err != nil {
-		return nil, err
+	for i, cand := range candidates {
+		fullURL := cand.base + cand.path + cand.querySuffix
+
+		// ── 根据 signVariant 选择签名 content ──
+		var signContent string
+		switch cand.signVariant {
+		case "hex":
+			signContent = hexBody // 加密后的 hex 串
+		default:
+			signContent = string(authv2Data) // 明文 JSON
+		}
+		userTokenSign := CalculateDynamicToken(cand.path, signContent, c.UserToken)
+
+		var bodyReader io.Reader
+		switch {
+		case cand.sendBinary:
+			bodyReader = bytes.NewReader(encryptedData)
+		default:
+			bodyReader = strings.NewReader(hexBody)
+		}
+		req, rerr := http.NewRequest("POST", fullURL, bodyReader)
+		if rerr != nil {
+			e := fmt.Errorf("[尝试%d/%d %s] build request: %w", i+1, len(candidates), cand.label, rerr)
+			results = append(results, tryResult{i + 1, cand.label, 0, fullURL, cand.contentType, cand.sendBinary, cand.signVariant})
+			setBestErr(e, 0)
+			continue
+		}
+		req.Header.Set("User-Agent", "WPFLauncher/0.0.0.0")
+		req.Header.Set("Accept-Encoding", "gzip")
+		req.Header.Set("Content-Type", cand.contentType)
+		req.Header.Set("user-id", c.UserID)
+		req.Header.Set("user-token", userTokenSign)
+
+		resp, derr := c.httpClient.Do(req)
+		if derr != nil {
+			e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v sign=%s): do=%w",
+				i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, derr)
+			results = append(results, tryResult{i + 1, cand.label, 0, fullURL, cand.contentType, cand.sendBinary, cand.signVariant})
+			setBestErr(e, 0)
+			continue
+		}
+		respBody, rerr := readResponseBody(resp)
+		_ = resp.Body.Close()
+		results = append(results, tryResult{i + 1, cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, cand.signVariant})
+		if rerr != nil {
+			e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v sign=%s): read body=%w",
+				i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, rerr)
+			setBestErr(e, resp.StatusCode)
+			continue
+		}
+		if resp.StatusCode == 200 && len(respBody) > 0 {
+			encryptedResp, herr := hex.DecodeString(string(respBody))
+			if herr != nil {
+				// BIN 响应可能直接是二进制密文而非 hex，也尝试直接解密
+				decryptedResp, derr2 := G79HttpDecrypt(respBody)
+				if derr2 != nil {
+					e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v sign=%s): status=200 但 body 非 hex=%q: %w",
+						i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, trimForErr(respBody), herr)
+					setBestErr(e, resp.StatusCode)
+					continue
+				}
+				return GetValidJSON(decryptedResp), nil
+			}
+			decryptedResp, derr2 := G79HttpDecrypt(encryptedResp)
+			if derr2 != nil {
+				e := fmt.Errorf("[尝试%d/%d %s] POST %s (ct=%s bin=%v sign=%s): status=200 解密失败: %w",
+					i+1, len(candidates), cand.label, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, derr2)
+				setBestErr(e, resp.StatusCode)
+				continue
+			}
+			return GetValidJSON(decryptedResp), nil
+		}
+		bodyStr := trimForErr(respBody)
+		var e error
+		switch resp.StatusCode {
+		case 401:
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2未授权: status=%d url=%s ct=%s bin=%v sign=%s body=%q。 "+
+				"请先完成Link连接 + SendGameStart 再调用 AuthV2，或重新登录 G79 刷新 UserToken",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, bodyStr)
+		case 403:
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2被拒绝: status=%d url=%s ct=%s bin=%v sign=%s body=%q。 "+
+				"可能是租赁服未开 / 服务器号无效 / UserToken 无权限（重新登录获取新Token再试）",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, bodyStr)
+		case 404:
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2路径不存在: status=404 url=%s ct=%s bin=%v sign=%s body=%q。 "+
+				"会继续自动回退其他组合；如果所有候选都 404，请把完整错误贴给开发者追加 BaseURL。",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, bodyStr)
+		case 400:
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2请求格式错误: status=%d url=%s ct=%s bin=%v sign=%s body=%q。 "+
+				"路径已对，重点排查：(1)netease_sid 应为 serverID:RentalGame；(2)Link GameStart 后是否进入了租赁服房间（EnterRentalServerWorld 是否 code=0）；(3)ClientKey 是否是合法 ECC P384 SPKI；(4)优先 binary+sign=hex 组合",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, bodyStr)
+		case 500, 502, 503, 504:
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2服务端返回内部错误: status=%d url=%s ct=%s bin=%v sign=%s body=%q。 "+
+				"注意：status=500 更可能是「请求体解密失败 / user-token 签名错误 / Link 缺少租赁服会话绑定 / ClientKey 非法」而非服端崩。 "+
+				"核对：(1)重新 SAuth 登录刷新 UserToken；(2)Link+GameStart 成功；(3)Enter 租赁服 code=0；(4)两种签名变体都试一下(sign=plain/hex)。",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, bodyStr)
+		default:
+			e = fmt.Errorf("[尝试%d/%d %s] AuthV2响应异常: status=%d url=%s ct=%s bin=%v sign=%s body=%q",
+				i+1, len(candidates), cand.label, resp.StatusCode, fullURL, cand.contentType, cand.sendBinary, cand.signVariant, bodyStr)
+		}
+		setBestErr(e, resp.StatusCode)
 	}
 
-	decryptedResp, err := G79HttpDecrypt(encryptedResp)
-	if err != nil {
-		return nil, err
+	// 拼接汇总表（现在包含 sign 列，方便一眼看出签名变体差异）
+	var sb strings.Builder
+	sb.WriteString("\n========== AuthV2 全部候选尝试汇总表 ==========\n")
+	sb.WriteString(fmt.Sprintf("%-4s %-44s %-6s %-28s %-5s %s\n", "#", "LABEL", "STATUS", "CONTENT-TYPE", "bin", "sign"))
+	for _, r := range results {
+		binFlag := "hex"
+		if r.bin {
+			binFlag = "BIN"
+		}
+		label := r.label
+		if len(label) > 42 {
+			label = label[:42]
+		}
+		ct := r.ct
+		if len(ct) > 26 {
+			ct = ct[:26]
+		}
+		statusStr := fmt.Sprintf("%d", r.status)
+		if r.status == 0 {
+			statusStr = "ERR"
+		}
+		sb.WriteString(fmt.Sprintf("%-4d %-44s %-6s %-28s %-5s %s\n", r.idx, label, statusStr, ct, binFlag, r.signV))
 	}
+	sb.WriteString("================================================")
+	summary := sb.String()
 
-	return GetValidJSON(decryptedResp), nil
+	if bestErr == nil {
+		return nil, fmt.Errorf("AuthV2: 未构造出任何候选请求（ReleaseJSON 字段均为空，请先 NewClient 初始化）%s", summary)
+	}
+	return nil, fmt.Errorf("%w%s", bestErr, summary)
+}
+
+// trimForErr 把日志里的 body 限制到合理长度，避免整包 hex 刷满错误信息。
+func trimForErr(b []byte) string {
+	const max = 512
+	if len(b) <= max {
+		return string(b)
+	}
+	return string(b[:max]) + fmt.Sprintf("...(len=%d)", len(b))
 }

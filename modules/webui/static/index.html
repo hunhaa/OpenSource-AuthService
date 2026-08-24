@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bunker Web — G79 控制台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">■</span>
+    <span class="title">BUNKER<small>WEB</small></span>
+    <nav class="tabs">
+      <button class="tab active" data-tab="tab-auth">登录认证</button>
+      <button class="tab" data-tab="tab-account">账号操作</button>
+      <button class="tab" data-tab="tab-regbot">注册机</button>
+      <button class="tab" data-tab="tab-batch">塞入</button>
+      <button class="tab" data-tab="tab-register">账号注册</button>
+    </nav>
+  </div>
+  <div class="info">
+    <div id="ver-chip" class="chip">
+      <span class="dot"></span> 初始化中…
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <!-- Register Panel -->
+  <section id="tab-register" class="tab-panel card">
+    <h2>✨ 快速注册 4399 账号（无需外部二进制）</h2>
+    <p class="hint">直接内置 com4399 WebRegisterClient → 实名 → 登录，最后返回可直接使用的 <code>SAuth Cookie</code>（登录时可一键回填）。如果已经有账号，只需勾选「仅登录」填 user/pass 即可拿到 cookie。</p>
+    <div class="grid-2">
+      <div>
+        <label>用户名</label>
+        <div class="row" style="gap:6px">
+          <input id="reg-user" type="text" placeholder="留空自动生成">
+          <button id="btn-reg-preset" class="ghost">🎲 随机</button>
+        </div>
+      </div>
+      <div>
+        <label>密码</label>
+        <div class="row" style="gap:6px">
+          <input id="reg-pass" type="text" placeholder="留空自动生成">
+          <button id="btn-reg-preset2" class="ghost">🎲 随机</button>
+        </div>
+      </div>
+      <div>
+        <label>姓名（实名）</label>
+        <input id="reg-name" type="text" placeholder="如：张伟">
+      </div>
+      <div>
+        <label>身份证号（实名）</label>
+        <input id="reg-id" type="text" placeholder="18 位身份证号">
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;align-items:center">
+      <label class="switch">
+        <input id="reg-loginonly" type="checkbox">
+        <span>仅登录（已有账号，只用 user/pass 拿 SAuth Cookie）</span>
+      </label>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button id="btn-register" class="primary">🚀 注册 &amp; 获取 SAuth Cookie</button>
+      <span id="reg-msg" class="msg"></span>
+    </div>
+    <div id="reg-result" class="result hidden" style="margin-top:16px"></div>
+    <div id="reg-actions" class="row hidden" style="margin-top:10px">
+      <button id="btn-reg-fill" class="primary">⬅ 一键填入左侧登录认证</button>
+    </div>
+  </section>
+
+  <!-- Step 1: Auth -->
+  <section id="tab-auth" class="tab-panel">
+  <section id="card-auth" class="card">
+    <h2><span class="step">1</span> 账号认证 (SAuth Cookie)</h2>
+    <p class="hint">支持三种格式：<code>{"sauth_json":"{...}"}</code>、直接粘贴 <code>sauth_json</code> 对象、或 <code>sauth_json</code> 原始字符串。也可在「账号注册」标签页一键生成。</p>
+    <textarea id="cookie" placeholder='{"sauth_json": "{\"gameid\": \"x19\", \"login_channel\": \"netease\", ...}"}' rows="7"></textarea>
+    <div class="row">
+      <button id="btn-auth" class="primary">登录 / 刷新</button>
+      <span id="auth-msg" class="msg"></span>
+    </div>
+    <div id="auth-result" class="result hidden"></div>
+
+    <div id="fbtoken-box" class="fbtoken-box hidden">
+      <div class="fbtoken-header">
+        <h3>🎫 FBToken（ToolDelta / NeoOmega 验证服务器用）</h3>
+        <button id="btn-copy-fbtoken" class="ghost small">📋 复制 fbtoken</button>
+      </div>
+      <div class="row" style="flex-direction:column;gap:6px">
+        <label>fbtoken</label>
+        <input id="fbtoken" type="text" readonly class="mono big">
+      </div>
+      <div class="grid-2" style="margin-top:10px">
+        <div>
+          <label>验证服务器地址（ToolDelta 配置项）</label>
+          <div class="row" style="gap:6px">
+            <input id="auth-server-url" type="text" readonly class="mono">
+            <button id="btn-copy-authurl" class="ghost small">📋 复制</button>
+          </div>
+        </div>
+        <div>
+          <label>使用说明</label>
+          <div class="hint small" style="margin-top:4px">
+            ToolDelta 配置 → 选择「Bunker-web 验证服务器 §a✔」→ 手动输入此处的地址；或启动时 <code>--auth-server &lt;auth_server_url&gt; -T &lt;fbtoken&gt;</code>。<br>
+            ⚠ NeoOmega 客户端默认只允许 host = <code>localhost / 127.0.0.1 / liliya233.uk / user.fastbuilder.pro</code>，其他 host 需修改 neomega-core 白名单或通过本地反向代理转发。
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 2: Link -->
+  <section id="card-link" class="card disabled">
+    <h2><span class="step">2</span> 建立 Link 连接 (发送 GameStart)</h2>
+    <p class="hint">AuthV2 需要先建立 Link 连接并发送 GameStart 前置包，否则认证服务器会返回 400 空响应。</p>
+    <div class="row">
+      <button id="btn-link-start" class="primary">启动 Link + GameStart</button>
+      <button id="btn-link-stop" class="ghost">停止 Link</button>
+      <span id="link-msg" class="msg"></span>
+    </div>
+  </section>
+
+  <!-- Step 3: Search -->
+  <section id="card-search" class="card disabled">
+    <h2><span class="step">3</span> 租赁服搜索</h2>
+    <div class="row">
+      <input id="search-q" type="text" placeholder="输入服务器编号 / 名称，例如 52258662">
+      <button id="btn-search" class="primary">搜索</button>
+    </div>
+    <div id="search-result"></div>
+  </section>
+
+  <!-- Step 4: Enter + AuthV2 -->
+  <section id="card-enter" class="card disabled">
+    <h2><span class="step">4</span> 进入租赁服 &amp; 生成 AuthV2 (ChainInfo)</h2>
+    <div class="row">
+      <input id="enter-id" type="text" placeholder="上一步搜索出的 EntityID">
+      <input id="enter-pwd" type="text" placeholder="服务器密码 (可选)">
+      <button id="btn-enter" class="primary">进入</button>
+    </div>
+    <div id="enter-result"></div>
+    <div class="row" style="margin-top:18px">
+      <button id="btn-authv2" class="primary">生成 ChainInfo (AuthV2)</button>
+      <span id="authv2-msg" class="msg"></span>
+    </div>
+    <div id="authv2-result"></div>
+  </section>
+  </section><!-- /tab-auth -->
+
+  <!-- Regbot Panel: 批量注册机 -->
+  <section id="tab-regbot" class="tab-panel">
+    <section class="card">
+      <h2><span class="step">⚙</span> 参数配置</h2>
+      <p class="hint">基于 4 个仓库（JS4399MC / MCQTSS_4399register / boluoreg 4399Register / STBD1574 4399Register）的注册流程提炼，支持轻量 ptlogin.register.do 直连注册 + 代理轮换 + SFZ 池。</p>
+      <div class="grid-2">
+        <div>
+          <label>注册数量 <span class="regbot-stat" id="rb-sfz-cnt"></span></label>
+          <input id="rb-count" type="number" min="1" max="500" value="10" placeholder="1-500">
+        </div>
+        <div>
+          <label>并发数 <span class="regbot-stat" id="rb-proxy-cnt"></span></label>
+          <input id="rb-concurrency" type="number" min="1" max="32" value="3" placeholder="1-32">
+        </div>
+        <div>
+          <label>用户名前缀</label>
+          <input id="rb-uprefix" type="text" value="g79" placeholder="例如：g79">
+        </div>
+        <div>
+          <label>昵称前缀</label>
+          <input id="rb-nprefix" type="text" value="Fun" placeholder="例如：Fun">
+        </div>
+        <div>
+          <label>统一密码（留空自动生成）</label>
+          <input id="rb-password" type="text" placeholder="留空每号随机10位">
+        </div>
+        <div>
+          <label>注册间隔（秒）</label>
+          <input id="rb-delay" type="number" min="0" max="60" value="2" placeholder="0-60">
+        </div>
+      </div>
+      <div class="row" style="margin-top:14px;gap:18px;flex-wrap:wrap">
+        <label class="switch">
+          <input id="rb-use-direct" type="checkbox" checked>
+          <span>轻量模式 (ptlogin.register.do 直连，降低风控)</span>
+        </label>
+        <label class="switch">
+          <input id="rb-gen-sauth" type="checkbox" checked>
+          <span>生成 SAuth Cookie (注册后自动登录拿)</span>
+        </label>
+        <label class="switch">
+          <input id="rb-use-proxy" type="checkbox">
+          <span>每任务轮换代理（需先上传代理池）</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">📦</span> SFZ / 代理池上传</h2>
+      <div class="grid-2">
+        <div>
+          <label>SFZ 身份证库（支持 姓名----身份证号 / 姓名:身份证号 / CSV）</label>
+          <div class="row" style="gap:6px;margin-top:4px">
+            <input id="rb-sfz-file" type="file" accept=".txt,.csv">
+            <button id="rb-upload-sfz" class="ghost small">上传 SFZ</button>
+          </div>
+          <div class="hint small" id="rb-sfz-msg" style="margin-top:6px"></div>
+        </div>
+        <div>
+          <label>HTTP 代理池（每行一个，支持 user:pass@host:port）</label>
+          <div class="row" style="gap:6px;margin-top:4px">
+            <input id="rb-proxy-file" type="file" accept=".txt,.list">
+            <button id="rb-upload-proxy" class="ghost small">上传代理</button>
+          </div>
+          <div class="hint small" id="rb-proxy-msg" style="margin-top:6px"></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:18px">
+        <button id="rb-start" class="primary">🚀 开始批量注册</button>
+        <button id="rb-stop" class="ghost" disabled>⏹ 停止</button>
+        <span id="rb-msg" class="msg"></span>
+      </div>
+      <div id="rb-progress" class="regbot-progress hidden" style="margin-top:16px">
+        <div class="regbot-progress-bar"><div class="regbot-progress-fill" id="rb-progress-fill"></div></div>
+        <div class="regbot-progress-text" id="rb-progress-text">0 / 0</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">📊</span> 结果与导出</h2>
+      <div class="row" id="rb-summary" style="gap:10px;margin-bottom:12px">
+        <!-- 动态生成统计 chip -->
+      </div>
+      <div class="row" style="gap:6px;margin-bottom:14px;flex-wrap:wrap">
+        <button id="rb-export-csv" class="ghost small" disabled>📄 导出 CSV</button>
+        <button id="rb-export-txt" class="ghost small" disabled>📝 导出 账号----密码</button>
+        <button id="rb-export-sauth" class="ghost small" disabled>🎫 导出 SAuth</button>
+        <button id="rb-export-json" class="ghost small" disabled>📋 导出 JSON</button>
+        <label class="switch" style="margin-left:8px">
+          <input id="rb-success-only" type="checkbox" checked>
+          <span>仅成功项</span>
+        </label>
+      </div>
+      <div id="rb-results" class="regbot-results"></div>
+    </section>
+  </section><!-- /tab-regbot -->
+
+  <!-- Batch Panel: 批量塞入 -->
+  <section id="tab-batch" class="tab-panel">
+    <section class="card">
+      <h2><span class="step">1</span> 批量塞入辅助账号</h2>
+      <p class="hint">输入多个 <code>SAuth Cookie</code>，每个下方填写昵称（留空则不改昵称）。全部填完后在底部统一输入服务器号并点击「批量进入」，系统会自动为每个账号执行 认证 → 设昵称 → Link+GameStart → 进入租赁服。</p>
+      <div id="batch-list" class="batch-list">
+        <!-- 动态生成 -->
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btn-batch-add" class="ghost">➕ 添加一行</button>
+        <button id="btn-batch-clear" class="ghost">🗑️ 清空全部</button>
+      </div>
+      <div class="grid-2" style="margin-top:18px">
+        <div>
+          <label>服务器号（统一，支持纯数字号或服务器名，自动转服ID）</label>
+          <div class="row" style="gap:6px;margin-top:4px">
+            <input id="batch-server-id" type="text" placeholder="例如 52258662 → 自动 lookup">
+            <button id="btn-batch-lookup" class="ghost small">🔍 转服ID</button>
+          </div>
+          <div id="batch-lookup-result" class="hint small" style="margin-top:4px"></div>
+        </div>
+        <div>
+          <label>服务器密码（可选，统一）</label>
+          <input id="batch-server-pwd" type="text" placeholder="无密码留空">
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button id="btn-batch-enter" class="primary">🚀 批量进入</button>
+        <span id="batch-enter-msg" class="msg"></span>
+      </div>
+      <div id="batch-enter-result"></div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">2</span> 批量生成 AuthV2 (ChainInfo)</h2>
+      <p class="hint">对上方已成功进入的账号，统一生成 <code>ChainInfo</code>。需要先完成上一步的批量进入。</p>
+      <div class="row" style="margin-top:16px">
+        <button id="btn-batch-authv2" class="primary">🔑 批量 AuthV2</button>
+        <span id="batch-authv2-msg" class="msg"></span>
+      </div>
+      <div id="batch-authv2-result"></div>
+    </section>
+  </section><!-- /tab-batch -->
+
+  <!-- Account Panel: 账号操作（改昵称/简介/头像/皮肤/资料/动态/活力） -->
+  <section id="tab-account" class="tab-panel">
+    <section class="card">
+      <h2><span class="step">👤</span> 选择要操作的账号</h2>
+      <p class="hint">先到「登录认证」tab 登录账号，或到「塞入」tab 完成批量进入，下方会自动出现 token 选择器。所有操作都基于当前选中 token 对应的已登录会话。</p>
+      <div class="grid-2">
+        <div>
+          <label>会话 Token（从登录认证 / 塞入里自动带出）</label>
+          <select id="acc-token">
+            <option value="">— 尚未登录 —</option>
+          </select>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <div class="row" style="gap:6px">
+            <button id="btn-acc-refresh" class="ghost">🔄 刷新账号资料</button>
+            <button id="btn-acc-checkin" class="ghost">⚡ 活力签到</button>
+          </div>
+        </div>
+      </div>
+      <div id="acc-profile" class="acc-profile hidden" style="margin-top:16px"></div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">✏️</span> 改昵称 / 改简介 / 改头像 / 改性别</h2>
+      <div class="grid-2">
+        <div>
+          <label>新昵称（留空不改）</label>
+          <input id="acc-name" type="text" placeholder="例如 FunAuth-01">
+        </div>
+        <div>
+          <label>新头像 ID / HeadImage（留空不改）</label>
+          <input id="acc-head" type="text" placeholder="素材 item_id，例如 default_head_001">
+        </div>
+        <div>
+          <label>性别（male/female，留空不改）</label>
+          <input id="acc-gender" type="text" placeholder="male / female">
+        </div>
+        <div>
+          <label>头像框 FrameID（留空不改）</label>
+          <input id="acc-frame" type="text" placeholder="留空不改">
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <label>简介 / 个性签名（留空不改）</label>
+        <textarea id="acc-sign" rows="3" placeholder="例如：今天也要加油鸭！"></textarea>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button id="btn-acc-update" class="primary">💾 保存修改</button>
+        <span id="acc-update-msg" class="msg"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">👕</span> 更换皮肤</h2>
+      <p class="hint">输入皮肤的 <code>item_id</code>（可在游戏内商城列表、或 store_search_mcgame_items 接口中获取）。若未持有该皮肤，内部会先走 Purchase，再 Apply 到 skin_data。</p>
+      <div class="grid-2">
+        <div>
+          <label>皮肤 ItemID</label>
+          <input id="acc-skin-id" type="text" placeholder="例如 skin_steve_001">
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btn-acc-skin" class="primary">🎨 更换皮肤</button>
+        <span id="acc-skin-msg" class="msg"></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">💬</span> 发送个人动态</h2>
+      <div>
+        <label>动态正文</label>
+        <textarea id="acc-moment-content" rows="4" placeholder="今天 FunAuth PR00011 成功塞入 100 个号，爽！"></textarea>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label class="switch">
+          <input id="acc-moment-comment" type="checkbox" checked>
+          <span>允许评论</span>
+        </label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-acc-moment" class="primary">📣 发布动态</button>
+        <span id="acc-moment-msg" class="msg"></span>
+      </div>
+    </section>
+  </section><!-- /tab-account -->
+</main>
+
+<footer>
+  <div>适配版本：<b id="ev">—</b> · 补丁 <b id="pv">—</b></div>
+  <div class="sub"><span id="build-ver">⚡ PR00011</span> · 基于 g79client · 参考 Cynic158/Bunker-Web 与 CoozillaX/bunker-web 设计</div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

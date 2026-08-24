@@ -21,8 +21,10 @@ require (
 require (
 	github.com/database64128/chacha8-go v0.0.0-20250815115417-e0f2726d8bd0 // indirect
 	github.com/ebitengine/purego v0.9.0 // indirect
+	github.com/fogleman/gg v1.3.0 // indirect
 	github.com/getcharzp/onnxruntime_purego v0.0.0-20260118041137-401482b32507 // indirect
 	github.com/go-sql-driver/mysql v1.7.0 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	golang.org/x/image v0.32.0 // indirect
