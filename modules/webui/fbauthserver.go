@@ -476,7 +476,12 @@ func handleFBAuthV2(c *gin.Context, req phoenixLoginReq) {
 			pubKey = clientPublicKey
 		}
 	}
-	authV2Data, err := s.Client.GenerateRentalGameAuthV2(serverCode, pubKey)
+	// 使用 Enter 返回的实际 server_id（UUID 格式），而非传入的 serverCode（数字编号）
+	actualServerID := e.ServerID
+	if actualServerID == "" {
+		actualServerID = serverCode // fallback
+	}
+	authV2Data, err := s.Client.GenerateRentalGameAuthV2(actualServerID, pubKey)
 	if err != nil {
 		failPhoenix(c, 500, "GenerateRentalGameAuthV2 失败: "+err.Error(), -1)
 		return

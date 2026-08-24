@@ -454,91 +454,104 @@ func HandleRentalEnter(c *gin.Context) {
 	e := resp.Entity
 	ipAddr := fmt.Sprintf("%s:%v", e.McserverHost, e.McserverPort.String())
 	ok(c, gin.H{
-		"server_id": req.ServerID,
+		"server_id": e.ServerID, // 返回实际服务器 ID（UUID），用于后续 AuthV2
 		"ip":        ipAddr,
 		"host":      e.McserverHost,
 		"port":      e.McserverPort.String(),
-		"raw":       e,
-	})
-}
-
 func HandleRentalAuthV2(c *gin.Context) {
-	var req AuthV2Req
-	if err := c.ShouldBindJSON(&req); err != nil {
-		fail(c, 400, "参数错误: %v", err)
-		return
-	}
-	s, ok0 := loadSession(req.Token)
-	if !ok0 {
-		fail(c, 401, "会话不存在或已过期")
-		return
-	}
-	if req.ServerID == "" {
-		fail(c, 400, "server_id 不能为空")
-		return
-	}
-
-	// 检查Link状态
-	if s.LinkConn == nil {
-		fail(c, 400, "未启动Link连接，请先调用 /link/start 建立连接并完成GameStart")
-		return
-	}
-
-	// 两种字段组合依次尝试：先 PC 版（os=windows patchVersion空），失败再试 PE 版（os=android）
-	// 两种变体同时尝试可以覆盖不同服务器类型对字段的要求
-	type variant struct {
-		name string
-		gen  func() ([]byte, error)
-	}
-	variants := []variant{
-		{
-			name: "PC版(os=windows,patch=\"\",platform=pc,pcCheck=0)",
-			gen: func() ([]byte, error) {
-				return s.Client.GeneratePCRentalGameAuthV2(req.ServerID, clientPublicKey)
-			},
-		},
-		{
-			name: "PE版(os=android,patch=latest,platform=android)",
-			gen: func() ([]byte, error) {
-				return s.Client.GenerateRentalGameAuthV2(req.ServerID, clientPublicKey)
-			},
-		},
-	}
-
-	var firstErr error
-	var lastErr error
-	for vi, v := range variants {
-		data, gerr := v.gen()
-		if gerr != nil {
-			lastErr = fmt.Errorf("[%s] 生成AuthV2失败: %w", v.name, gerr)
-			if firstErr == nil {
-				firstErr = lastErr
-			}
-			continue
-		}
-		chainInfo, aerr := s.Client.SendAuthV2Request(data)
-		if aerr == nil {
-			ok(c, gin.H{
-				"server_id":       req.ServerID,
-				"used_variant":    v.name,
-				"chain_info_b64":  encodeB64(chainInfo),
-				"chain_info_hex":  hex.EncodeToString(chainInfo),
-				"chain_info_len":  len(chainInfo),
-			})
-			return
-		}
-		lastErr = fmt.Errorf("[%s] AuthV2请求失败: %w", v.name, aerr)
-		if firstErr == nil {
-			firstErr = lastErr
-		}
-		_ = vi
-	}
-
-	// 两种都失败，返回最后一个的详细错误（含汇总表），并在开头说明两种都试过了
-	fail(c, 502, "AuthV2两种字段组合均失败。%v", lastErr)
+var req AuthV2Req
+if err := c.ShouldBindJSON(&req); err != nil {
+fail(c, 400, "参数错误：%v", err)
+return
+}
+s, ok0 := loadSession(req.Token)
+if !ok0 {
+fail(c, 401, "会话不存在或已过期")
+return
+}
+if req.ServerID == "" {
+fail(c, 400, "server_id 不能为空")
+return
 }
 
-// ---------- small utils ----------
+// 检查 Link 状态
+if s.LinkConn == nil {
+fail(c, 400, "未启动 Link 连接，请先调用 /link/start 建立连接并完成 GameStart")
+return
+}
+
+// 关键修复：AuthV2需要Link连接感知到租赁服房间绑定
+// 由于 Enter 是通过 HTTP 独立调用的，Link 连接本身不知道用户进入了哪个房间
+// 解决方案：在 AuthV2 前重新 Enter 一次，确保服务端正确绑定 Link 会话到租赁服房间
+// 这一步是幂等的，多次 Enter 同一房间不会产生副作用
+enterResp, err := s.Client.EnterRentalServerWorld(req.ServerID, "")
+if err != nil {
+fail(c, 500, "重新进入租赁服失败（Link 房间绑定需要）: %v", err)
+return
+}
+if enterResp.Code != 0 {
+fail(c, 422, "重新进入租赁服失败 code=%d msg=%s（Link 房间绑定需要）", enterResp.Code, enterResp.Message)
+return
+}
+// 使用 Enter 返回的实际 server_id（UUID 格式），确保 netease_sid 正确
+actualServerID := enterResp.Entity.ServerID
+if actualServerID == "" {
+actualServerID = req.ServerID // fallback
+}
+
+// 两种字段组合依次尝试：先 PC 版（os=windows patchVersion 空），失败再试 PE 版（os=android）
+// 两种变体同时尝试可以覆盖不同服务器类型对字段的要求
+type variant struct {
+name string
+gen  func(serverID string) ([]byte, error)
+}
+variants := []variant{
+{
+name: "PC 版 (os=windows,patch=\"\",platform=pc,pcCheck=0)",
+gen: func(sid string) ([]byte, error) {
+return s.Client.GeneratePCRentalGameAuthV2(sid, clientPublicKey)
+},
+},
+{
+name: "PE 版 (os=android,patch=latest,platform=android)",
+gen: func(sid string) ([]byte, error) {
+return s.Client.GenerateRentalGameAuthV2(sid, clientPublicKey)
+},
+},
+}
+
+var firstErr error
+var lastErr error
+for vi, v := range variants {
+data, gerr := v.gen(actualServerID)
+if gerr != nil {
+lastErr = fmt.Errorf("[%s] 生成 AuthV2 失败：%w", v.name, gerr)
+if firstErr == nil {
+firstErr = lastErr
+}
+continue
+}
+chainInfo, aerr := s.Client.SendAuthV2Request(data)
+if aerr == nil {
+ok(c, gin.H{
+"server_id":       actualServerID,
+"used_variant":    v.name,
+"chain_info_b64":  encodeB64(chainInfo),
+"chain_info_hex":  hex.EncodeToString(chainInfo),
+"chain_info_len":  len(chainInfo),
+})
+return
+}
+lastErr = fmt.Errorf("[%s] AuthV2 请求失败：%w", v.name, aerr)
+if firstErr == nil {
+firstErr = lastErr
+}
+_ = vi
+}
+
+// 两种都失败，返回最后一个的详细错误（含汇总表），并在开头说明两种都试过了
+fail(c, 502, "AuthV2 两种字段组合均失败。%v", lastErr)
+}
 
 func trimBytes(b []byte) []byte {
 	start, end := 0, len(b)

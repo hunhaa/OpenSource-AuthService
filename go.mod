@@ -1,6 +1,6 @@
 module github.com/Yeah114/FunAuth
 
-go 1.19
+go 1.23
 
 replace github.com/Yeah114/g79client => ./modules/g79client
 
