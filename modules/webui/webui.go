@@ -167,6 +167,7 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		g.POST("/batch/register/export", HandleExportBatchRegisterCSV)
 		g.POST("/batch/sfz/upload", HandleUploadSFZ)
 		g.POST("/batch/proxy/upload", HandleUploadProxies)
+		g.POST("/batch/proxy/check", HandleCheckProxies)
 		g.GET("/batch/stats", HandleStatsBatch)
 
 		// 注册 (Bunker 风格)

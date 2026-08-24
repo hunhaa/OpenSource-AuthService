@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -155,33 +158,81 @@ func HandleUploadSFZ(c *gin.Context) {
 // ---------- 代理池 ----------
 
 type proxyEntry struct {
-	URL *url.URL
-	Raw string
+	URL     *url.URL
+	Raw     string
+	Dead    bool
+	DeadCnt int
 }
 
 var (
 	proxyMu   sync.RWMutex
 	proxyPool []proxyEntry
 	proxyPos  int
+
+	proxyIpPortRegex = regexp.MustCompile(`^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})$`)
 )
 
-// parseProxyString 解析 "127.0.0.1:8080" 或 "http://user:pass@127.0.0.1:8080"
+// parseProxyString 解析 "127.0.0.1:8080" / "user:pass@127.0.0.1:8080" / "http(s)://..."
 func parseProxyString(s string) (*proxyEntry, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
 	}
-	if !strings.Contains(s, "://") {
+	hasScheme := strings.Contains(s, "://")
+	if !hasScheme {
 		s = "http://" + s
 	}
 	u, err := url.Parse(s)
 	if err != nil {
 		return nil, err
 	}
+	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" {
+		return nil, fmt.Errorf("不支持的代理协议: %s", u.Scheme)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("代理缺少 host:port")
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return nil, fmt.Errorf("代理 host:port 格式不合法: %w", err)
+	}
+	portNum, _ := strconv.Atoi(port)
+	if portNum <= 0 || portNum > 65535 {
+		return nil, fmt.Errorf("非法端口: %s", port)
+	}
+	// 对裸 IP:PORT 做基本校验（带域名的放行）
+	if ip := net.ParseIP(host); ip != nil {
+		if !proxyIpPortRegex.MatchString(ip.String() + ":" + port) {
+			return nil, fmt.Errorf("IP:PORT 不匹配正则")
+		}
+	}
 	return &proxyEntry{URL: u, Raw: s}, nil
 }
 
 func HandleUploadProxies(c *gin.Context) {
+	parseList := func(items []string) ([]proxyEntry, []string) {
+		var list []proxyEntry
+		var errs []string
+		for i, s := range items {
+			s = strings.TrimSpace(s)
+			if s == "" || strings.HasPrefix(s, "#") {
+				continue
+			}
+			p, e := parseProxyString(s)
+			if e != nil {
+				errs = append(errs, fmt.Sprintf("第%d行[%s]: %v", i+1, s, e))
+				continue
+			}
+			if p != nil {
+				list = append(list, *p)
+			}
+		}
+		return list, errs
+	}
+
+	var list []proxyEntry
+	var errs []string
+
 	form, err := c.MultipartForm()
 	if err != nil {
 		// 兼容 JSON body
@@ -192,86 +243,114 @@ func HandleUploadProxies(c *gin.Context) {
 			fail(c, 400, "解析失败: %v 或 %v", err, e2)
 			return
 		}
-		var list []proxyEntry
-		for _, s := range body.Proxies {
-			p, e := parseProxyString(s)
-			if e == nil && p != nil {
-				list = append(list, *p)
+		list, errs = parseList(body.Proxies)
+	} else {
+		files := form.File["proxy_file"]
+		if len(files) > 0 {
+			f, err := files[0].Open()
+			if err != nil {
+				fail(c, 400, "打开文件失败: %v", err)
+				return
 			}
-		}
-		proxyMu.Lock()
-		proxyPool = list
-		proxyPos = 0
-		proxyMu.Unlock()
-		ok(c, gin.H{"count": len(list)})
-		return
-	}
-	files := form.File["proxy_file"]
-	if len(files) > 0 {
-		f, err := files[0].Open()
-		if err != nil {
-			fail(c, 400, "打开文件失败: %v", err)
+			defer f.Close()
+			var items []string
+			scanner := bufio.NewScanner(f)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for scanner.Scan() {
+				items = append(items, scanner.Text())
+			}
+			list, errs = parseList(items)
+		} else if vals, got := form.Value["proxies"]; got && len(vals) > 0 {
+			raw := vals[0]
+			lines := strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' || r == ';' })
+			list, errs = parseList(lines)
+		} else {
+			fail(c, 400, "未找到 proxy_file 或 proxies 字段")
 			return
 		}
-		defer f.Close()
-		var list []proxyEntry
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			s := strings.TrimSpace(scanner.Text())
-			if s == "" || strings.HasPrefix(s, "#") {
-				continue
-			}
-			p, e := parseProxyString(s)
-			if e == nil && p != nil {
-				list = append(list, *p)
-			}
-		}
-		proxyMu.Lock()
-		proxyPool = list
-		proxyPos = 0
-		proxyMu.Unlock()
-		ok(c, gin.H{"count": len(list)})
-		return
 	}
-	// JSON via Value
-	if vals, got := form.Value["proxies"]; got && len(vals) > 0 {
-		raw := vals[0]
-		lines := strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' || r == ';' })
-		var list []proxyEntry
-		for _, s := range lines {
-			p, e := parseProxyString(s)
-			if e == nil && p != nil {
-				list = append(list, *p)
-			}
-		}
-		proxyMu.Lock()
-		proxyPool = list
-		proxyPos = 0
-		proxyMu.Unlock()
-		ok(c, gin.H{"count": len(list)})
-		return
-	}
-	fail(c, 400, "未找到 proxy_file 或 proxies 字段")
+	proxyMu.Lock()
+	proxyPool = list
+	proxyPos = 0
+	proxyMu.Unlock()
+	ok(c, gin.H{"count": len(list), "invalid": errs})
 }
 
-func nextProxyTransport() (http.RoundTripper, bool) {
-	proxyMu.RLock()
+// nextProxyTransport 取下一个活代理，最多跳过 n*2 个已死代理
+func nextProxyTransport() (*http.Transport, bool) {
+	proxyMu.Lock()
 	n := len(proxyPool)
 	if n == 0 {
-		proxyMu.RUnlock()
+		proxyMu.Unlock()
 		return nil, false
 	}
-	p := proxyPool[proxyPos%n]
-	proxyMu.RUnlock()
-	proxyMu.Lock()
-	proxyPos++
+	start := proxyPos
+	var chosen *proxyEntry
+	for i := 0; i < n*2; i++ {
+		idx := proxyPos % n
+		entry := &proxyPool[idx]
+		proxyPos++
+		if entry.Dead {
+			continue
+		}
+		chosen = entry
+		break
+	}
+	// 没有活的：重置 dead 标记，再取第一个
+	if chosen == nil {
+		for i := range proxyPool {
+			proxyPool[i].Dead = false
+		}
+		idx := start % n
+		chosen = &proxyPool[idx]
+		proxyPos = start + 1
+	}
+	u := chosen.URL
 	proxyMu.Unlock()
 	return &http.Transport{
-		Proxy:               http.ProxyURL(p.URL),
+		Proxy:               http.ProxyURL(u),
 		IdleConnTimeout:     30 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}, true
 }
+
+func currentProxyFromTransport(tr http.RoundTripper) string {
+	tp, ok := tr.(*http.Transport)
+	if !ok || tp.Proxy == nil {
+		return ""
+	}
+	u, e := tp.Proxy(nil)
+	if e != nil || u == nil {
+		return ""
+	}
+	return u.Host
+}
+
+func markProxyDead(rawHost string) {
+	if rawHost == "" {
+		return
+	}
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	for i := range proxyPool {
+		if proxyPool[i].URL.Host == rawHost {
+			proxyPool[i].DeadCnt++
+			if proxyPool[i].DeadCnt >= 3 {
+				proxyPool[i].Dead = true
+			}
+			return
+		}
+	}
+}
+
+func refreshProxy(tr http.RoundTripper) (*http.Transport, bool) {
+	if tr == nil {
+		// 本来就没代理，下次还是没代理
+		return nil, false
+	}
+	return nextProxyTransport()
+}
+
 
 // ---------- 批量注册任务 ----------
 
@@ -356,15 +435,12 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 		Status:    "error",
 	}
 
-	var transport http.RoundTripper
+	var transport *http.Transport
+	var proxyOK bool
 	if req.UseProxyPerTask {
-		if tr, ok := nextProxyTransport(); ok {
-			transport = tr
-			if tp, got := tr.(*http.Transport); got && tp.Proxy != nil {
-				if u, e2 := tp.Proxy(nil); e2 == nil && u != nil {
-					item.ProxyUsed = u.Host
-				}
-			}
+		transport, proxyOK = nextProxyTransport()
+		if proxyOK {
+			item.ProxyUsed = currentProxyFromTransport(transport)
 		}
 	}
 
@@ -375,6 +451,15 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 			item.DisplayMsg = "任务已取消"
 			return item
 		default:
+		}
+
+		// 每次重试都换新代理（如果启用了代理池）
+		if attempt > 0 && req.UseProxyPerTask {
+			newTr, ok2 := refreshProxy(transport)
+			if ok2 {
+				transport = newTr
+				item.ProxyUsed = currentProxyFromTransport(transport)
+			}
 		}
 
 		if req.UseDirect {
@@ -412,6 +497,7 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 					continue
 				case e == account4399.ErrRiskControlTriggered:
 					item.Status = "risk_control"
+					markProxyDead(item.ProxyUsed)
 					if attempt < maxRetries-1 {
 						time.Sleep(5 * time.Second)
 					}
@@ -430,7 +516,13 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 					return item
 				case e == account4399.ErrRegisterRejected:
 					item.Status = "error"
+					markProxyDead(item.ProxyUsed)
 					continue
+				default:
+					// 网络错误 / 代理超时 / 未知错误一律视为代理失效，换下一个
+					if e != nil {
+						markProxyDead(item.ProxyUsed)
+					}
 				}
 				if attempt < maxRetries-1 {
 					time.Sleep(2 * time.Second)
@@ -471,10 +563,15 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 				continue
 			case err == account4399.ErrRiskControlTriggered:
 				item.Status = "risk_control"
+				markProxyDead(item.ProxyUsed)
 				if attempt < maxRetries-1 {
 					time.Sleep(5 * time.Second)
 				}
 				continue
+			default:
+				if err != nil {
+					markProxyDead(item.ProxyUsed)
+				}
 			}
 			if attempt < maxRetries-1 {
 				time.Sleep(2 * time.Second)
@@ -527,10 +624,13 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 			continue
 		case strings.Contains(em, "风控"), strings.Contains(em, "稍后再试"):
 			item.Status = "risk_control"
+			markProxyDead(item.ProxyUsed)
 			if attempt < maxRetries-1 {
 				time.Sleep(5 * time.Second)
 			}
 			continue
+		default:
+			markProxyDead(item.ProxyUsed)
 		}
 		if attempt < maxRetries-1 {
 			time.Sleep(2 * time.Second)
@@ -710,11 +810,148 @@ func HandleStatsBatch(c *gin.Context) {
 	proxyMu.RLock()
 	prxCnt := len(proxyPool)
 	prxPos := proxyPos
+	var alive, dead int
+	for _, p := range proxyPool {
+		if p.Dead {
+			dead++
+		} else {
+			alive++
+		}
+	}
 	proxyMu.RUnlock()
 	ok(c, gin.H{
 		"sfz_count":   sfzCnt,
 		"sfz_pos":     sfzPos,
 		"proxy_count": prxCnt,
 		"proxy_pos":   prxPos,
+		"proxy_alive": alive,
+		"proxy_dead":  dead,
 	})
 }
+
+type proxyCheckResult struct {
+	Proxy       string  `json:"proxy"`
+	OK          bool    `json:"ok"`
+	HTTPStatus  int     `json:"http_status,omitempty"`
+	Size        int     `json:"size,omitempty"`
+	TimeMs      int64   `json:"time_ms"`
+	Error       string  `json:"error,omitempty"`
+}
+
+// HandleCheckProxies 对已上传代理池或入参代理列表做连通性预检
+// 目标：访问 https://ptlogin.4399.com/ptlogin/captcha.do 验证能否拉到验证码（HTTP 200 且 body>300B）
+func HandleCheckProxies(c *gin.Context) {
+	var body struct {
+		Proxies []string `json:"proxies"` // 空=检查当前 proxyPool
+		Target  string   `json:"target"`  // 自定义探测 URL
+		Timeout int      `json:"timeout"` // 秒，默认 6
+	}
+	var errmsg string
+	if err := c.ShouldBindJSON(&body); err != nil {
+		errmsg = err.Error()
+	}
+	if body.Timeout <= 0 {
+		body.Timeout = 6
+	}
+	if body.Target == "" {
+		body.Target = "https://ptlogin.4399.com/ptlogin/captcha.do?captchaId=captchaReq01"
+	}
+
+	// 构造待检测列表
+	var list []string
+	if len(body.Proxies) > 0 {
+		for _, s := range body.Proxies {
+			s = strings.TrimSpace(s)
+			if s == "" || strings.HasPrefix(s, "#") {
+				continue
+			}
+			list = append(list, s)
+		}
+	} else {
+		proxyMu.RLock()
+		for _, p := range proxyPool {
+			list = append(list, p.URL.Host)
+		}
+		proxyMu.RUnlock()
+	}
+	if len(list) == 0 {
+		ok(c, gin.H{"total": 0, "alive": 0, "dead": 0, "results": nil,
+			"msg": "proxy_pool_empty", "parse_err": errmsg})
+		return
+	}
+	if len(list) > 500 {
+		list = list[:500]
+	}
+
+	const conc = 20
+	sem := make(chan struct{}, conc)
+	var wg sync.WaitGroup
+	results := make([]proxyCheckResult, len(list))
+	for i, raw := range list {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, raw string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			r := proxyCheckResult{Proxy: raw}
+			t0 := time.Now()
+			// 构造 proxy url
+			uStr := raw
+			if !strings.Contains(uStr, "://") {
+				uStr = "http://" + uStr
+			}
+			u, perr := url.Parse(uStr)
+			if perr != nil {
+				r.Error = "parse: " + perr.Error()
+				results[i] = r
+				return
+			}
+			client := &http.Client{
+				Timeout: time.Duration(body.Timeout) * time.Second,
+				Transport: &http.Transport{
+					Proxy:               http.ProxyURL(u),
+					TLSHandshakeTimeout: time.Duration(body.Timeout) * time.Second,
+				},
+			}
+			req, herr := http.NewRequestWithContext(c.Request.Context(), "GET", body.Target, nil)
+			if herr != nil {
+				r.Error = herr.Error()
+				r.TimeMs = time.Since(t0).Milliseconds()
+				results[i] = r
+				return
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36")
+			resp, xerr := client.Do(req)
+			r.TimeMs = time.Since(t0).Milliseconds()
+			if xerr != nil {
+				r.Error = xerr.Error()
+				results[i] = r
+				return
+			}
+			defer resp.Body.Close()
+			r.HTTPStatus = resp.StatusCode
+			b, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			r.Size = int(b)
+			r.OK = resp.StatusCode == 200 && r.Size > 300
+			results[i] = r
+		}(i, raw)
+	}
+	wg.Wait()
+
+	alive := 0
+	for _, r := range results {
+		if r.OK {
+			alive++
+		}
+	}
+	ok(c, gin.H{
+		"target":    body.Target,
+		"timeout_s": body.Timeout,
+		"total":     len(results),
+		"alive":     alive,
+		"dead":      len(results) - alive,
+		"results":   results,
+		"parse_err": errmsg,
+	})
+}
+
