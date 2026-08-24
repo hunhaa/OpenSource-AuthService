@@ -54,6 +54,21 @@ type WebRegisterRequest struct {
 	RealName    string
 	IDCard      string
 	CaptchaCode string
+	Transport   http.RoundTripper
+}
+
+// sanitizeTransport 识别并抹平 "接口非 nil，内部 *http.Transport 指针为 nil" 的陷阱
+func sanitizeTransport(rt http.RoundTripper) http.RoundTripper {
+	if rt == nil {
+		return nil
+	}
+	switch t := rt.(type) {
+	case *http.Transport:
+		if t == nil {
+			return nil
+		}
+	}
+	return rt
 }
 
 // WebRegisterResult 描述网页版 4399 注册结果。
@@ -117,14 +132,27 @@ func NewWebRegisterClient(httpClient *http.Client) *WebRegisterClient {
 	return &WebRegisterClient{httpClient: httpClient, userAgent: webRegisterUserAgent}
 }
 
+func NewWebRegisterClientWithTransport(rt http.RoundTripper) *WebRegisterClient {
+	rt = sanitizeTransport(rt)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: requestTimeout,
+	}
+	if rt != nil {
+		client.Transport = rt
+	}
+	return &WebRegisterClient{httpClient: client, userAgent: webRegisterUserAgent}
+}
+
 // RegisterWeb 执行网页版 4399 账号注册。
 func RegisterWeb(ctx context.Context, req WebRegisterRequest) (*WebRegisterResult, error) {
-	return NewWebRegisterClient(nil).Register(ctx, req)
+	return NewWebRegisterClientWithTransport(req.Transport).Register(ctx, req)
 }
 
 // RegisterWebCookie 执行网页版 4399 账号注册，然后使用 com4399 登录并返回 Cookie。
 func RegisterWebCookie(ctx context.Context, req WebRegisterRequest) (*WebRegisterCookieResult, error) {
-	client := NewWebRegisterClient(nil)
+	client := NewWebRegisterClientWithTransport(req.Transport)
 	return client.RegisterAndLoginCookie(ctx, req)
 }
 

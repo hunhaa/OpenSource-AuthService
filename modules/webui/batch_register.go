@@ -468,7 +468,11 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 				Password:  pwd,
 				RealName:  sfz.Name,
 				IDCard:    sfz.Number,
-				Transport: transport,
+			}
+			// 防止 typed nil (*http.Transport)(nil) 被塞到 http.RoundTripper 接口里
+			// —— 否则接口值 != nil 但底层指针为空，会在 net/http 内 SIGSEGV
+			if transport != nil {
+				dreq.Transport = transport
 			}
 			if req.GenSauth {
 				cookie, res, err := account4399.DirectRegisterAndLoginCookie(ctx, dreq)
@@ -585,6 +589,9 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 			Password: pwd,
 			RealName: sfz.Name,
 			IDCard:   sfz.Number,
+		}
+		if transport != nil {
+			wreq.Transport = transport
 		}
 		if req.GenSauth {
 			wRes, err := account4399.RegisterWebCookie(ctx, wreq)

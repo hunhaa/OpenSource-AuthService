@@ -93,7 +93,9 @@ func randomUserAgent() string {
 }
 
 func newDirectHTTPClient(transport http.RoundTripper) *http.Client {
-	if transport == nil {
+	// 注意：接口值 i != nil 不代表底层指针不是 nil（典型陷阱：var t *http.Transport = nil；rt http.RoundTripper = t；此时 rt != nil 但 *t 为空）
+	// 这里必须额外判断，否则 http.Client.Do 会在 (*Transport).alternateRoundTripper 里解引用崩溃。
+	if transport == nil || isNilRoundTripper(transport) {
 		transport = &http.Transport{
 			IdleConnTimeout: 30 * time.Second,
 		}
@@ -102,6 +104,18 @@ func newDirectHTTPClient(transport http.RoundTripper) *http.Client {
 		Transport: transport,
 		Timeout:   20 * time.Second,
 	}
+}
+
+// isNilRoundTripper 识别"接口非 nil，但内部封装的 *http.Transport 指针为空"的情况
+func isNilRoundTripper(rt http.RoundTripper) bool {
+	if rt == nil {
+		return true
+	}
+	switch t := rt.(type) {
+	case *http.Transport:
+		return t == nil
+	}
+	return false
 }
 
 var captchaIDRegexp = regexp.MustCompile(`/ptlogin/captcha\.do\?captchaId=([\w\d]+)`)
