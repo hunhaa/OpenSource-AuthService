@@ -491,9 +491,10 @@ function regbotRenderSummary(data){
     {label:"总数", v:total, c:""},
     {label:"成功", v:succ, c:"ok"},
     {label:"失败", v:fail, c:"err"},
-    {label:"SFZ受限", v:stats.sfz_limit||0, c:""},
+    {label:"OCR未就绪", v:stats.ocr_missing||0, c:"err"},
+    {label:"识别失败", v:stats.captcha_fail||0, c:"warn"},
+    {label:"SFZ受限", v:stats.sfz_limit||0, c:"warn"},
     {label:"用户已存在", v:stats.username_exist||0, c:""},
-    {label:"验证码失败", v:stats.captcha_fail||0, c:""},
     {label:"风控拦截", v:stats.risk_control||0, c:"warn"},
   ];
   box.innerHTML = chips.map(c=>`<div class="chip ${c.c}"><b>${c.v}</b> ${c.label}</div>`).join("");
@@ -501,6 +502,7 @@ function regbotRenderSummary(data){
 function regbotStatusClass(s){
   switch(s){
     case "success": return "ok";
+    case "ocr_missing": return "err";
     case "sfz_limit":
     case "sfz_freq":
     case "realname_error": return "warn";
@@ -521,7 +523,7 @@ function regbotRenderResults(results){
   results.forEach(r=>{
     const row = document.createElement("div");
     row.className = "regbot-result-row " + regbotStatusClass(r.status);
-    const statusIcon = r.status==="success" ? "✅" : r.status==="risk_control" ? "🛡" : r.status==="username_exist" ? "🔁" : r.status==="sfz_limit" ? "🪪" : r.status==="captcha_fail" ? "🔍" : "❌";
+    const statusIcon = r.status==="success" ? "✅" : r.status==="ocr_missing" ? "⛔" : r.status==="risk_control" ? "🛡" : r.status==="captcha_fail" ? "🔍" : r.status==="username_exist" ? "🔁" : r.status==="sfz_limit" ? "🪪" : "❌";
     const meta = document.createElement("div");
     meta.className = "regbot-result-meta";
     const header = document.createElement("div");

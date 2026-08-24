@@ -28,35 +28,62 @@ var (
 	captchaEngineErr  error
 )
 
+// ErrCaptchaEngineNotReady OCR 引擎未就绪（缺少 onnxruntime / 模型 / 字典）时返回。
+// 调用方收到此错误应放弃本次请求，不要生成随机验证码（否则会触发 4399 风控）。
+var ErrCaptchaEngineNotReady = fmt.Errorf("com4399: OCR 引擎不可用（缺少 onnxruntime 共享库 / common.onnx 模型 / dict.txt 字典）")
+
 // InitCaptchaEngine 使用指定的动态链接库、模型和字典路径初始化 ddddocr 验证码识别引擎。
-func InitCaptchaEngine(libPath, modelPath, dictPath string) error {
+// useCustomModel=true 适配 boluoreg 的 4399ocr.onnx（CTC 输出节点 output，int64）
+func InitCaptchaEngine(libPath, modelPath, dictPath string, useCustomModel ...bool) error {
 	captchaEngineOnce.Do(func() {
+		custom := true // 默认走自定义模型，匹配 boluoreg 4399ocr.onnx
+		if len(useCustomModel) > 0 {
+			custom = useCustomModel[0]
+		}
 		config := ddddocr.Config{
 			OnnxRuntimeLibPath: libPath,
 			ModelPath:          modelPath,
 			DictPath:           dictPath,
+			UseCustomModel:     custom,
 		}
 
 		captchaEngine, captchaEngineErr = ddddocr.NewEngine(config)
+		if captchaEngineErr == nil {
+			log.Printf("[4399-OCR] 引擎初始化成功 lib=%s model=%s dict=%s (custom=%v)",
+				filepath.Base(libPath), filepath.Base(modelPath), filepath.Base(dictPath), custom)
+		}
 	})
 	return captchaEngineErr
 }
 
 // getCaptchaEngine 获取或初始化 ddddocr 引擎。
-// 在程序运行目录（可执行文件目录、当前工作目录）下递归遍历查找所需文件：
-// ONNX Runtime 动态库（按平台匹配 .dll/.so/.dylib）、common.onnx、dict.txt，
-// 找到后即可初始化引擎。
+// 搜索顺序：
+//  1. ./ocr_resources/ （推荐，便于打包分发）
+//  2. <可执行文件目录>/ocr_resources/
+//  3. 从 cwd 递归搜索（向后兼容）
+//  4. 从 exe 目录递归搜索（向后兼容）
 func getCaptchaEngine() (*ddddocr.Engine, error) {
 	if captchaEngine != nil {
 		return captchaEngine, nil
 	}
-	// 候选根目录列表
-	roots := []string{"."}
-	if exe, err := os.Executable(); err == nil {
-		roots = append(roots, filepath.Dir(exe))
+	var roots []string
+	push := func(p string) {
+		if p != "" {
+			roots = append(roots, p)
+		}
 	}
+	// 第一优先级：ocr_resources 目录
+	push("./ocr_resources")
+	if exe, err := os.Executable(); err == nil {
+		push(filepath.Join(filepath.Dir(exe), "ocr_resources"))
+	}
+	// 第二优先级：从 cwd、exe 根目录递归搜索
+	push(".")
 	if cwd, err := os.Getwd(); err == nil {
-		roots = append(roots, cwd)
+		push(cwd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		push(filepath.Dir(exe))
 	}
 
 	required := []ocrFileSpec{
@@ -66,21 +93,25 @@ func getCaptchaEngine() (*ddddocr.Engine, error) {
 	}
 
 	var lastErr error
-	for _, root := range roots {
+	var searched []string
+	for i, root := range roots {
 		paths := findOCRFiles(root, required)
+		searched = append(searched, fmt.Sprintf("[%d]%s(found=%d/3)", i, root, len(paths)))
 		if len(paths) != len(required) {
 			continue
 		}
 		if err := InitCaptchaEngine(paths["lib"], paths["model"], paths["dict"]); err != nil {
 			lastErr = err
+			log.Printf("[4399-OCR] 在 %s 找到文件但初始化失败: %v", root, err)
 			continue
 		}
 		return captchaEngine, nil
 	}
+	log.Printf("[4399-OCR] 未找到 OCR 文件，搜索路径: %s", strings.Join(searched, " "))
 	if lastErr != nil {
-		return nil, fmt.Errorf("初始化 OCR 引擎失败: %w", lastErr)
+		return nil, fmt.Errorf("%w: %v", ErrCaptchaEngineNotReady, lastErr)
 	}
-	return nil, fmt.Errorf("找不到 OCR 所需文件（%s、common.onnx、dict.txt）", strings.Join(onnxRuntimeLibNames(), " 或 "))
+	return nil, ErrCaptchaEngineNotReady
 }
 
 // ocrFileSpec 描述一个待查找文件的可接受文件名集合。

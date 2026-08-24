@@ -40,6 +40,7 @@ var (
 	ErrRegisterRejected     = errors.New("com4399: register rejected")
 	ErrRealNameRejected     = errors.New("com4399: real-name rejected")
 	ErrRiskControlTriggered = errors.New("com4399: risk control triggered")
+	ErrCaptchaFailed        = errors.New("com4399: captcha recognition failed (engine missing or wrong code)")
 
 	registerUsernamePattern = regexp.MustCompile(`^[\w@]{3,20}$`)
 	registerPasswordPattern = regexp.MustCompile(`^[\w\.(!@#$%&)]{6,20}$`)

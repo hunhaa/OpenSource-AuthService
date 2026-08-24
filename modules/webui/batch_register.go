@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -400,7 +401,6 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 				switch e := err; {
 				case e == account4399.ErrUsernameExists:
 					item.Status = "username_exist"
-					// 换个用户名再试
 					user = generateUsername(strings.TrimSpace(req.UsernamePrefix), idx*100+attempt)
 					item.Username = user
 					continue
@@ -414,6 +414,15 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 					item.Status = "risk_control"
 					if attempt < maxRetries-1 {
 						time.Sleep(5 * time.Second)
+					}
+					continue
+				case errors.Is(e, account4399.ErrCaptchaEngineNotReady):
+					item.Status = "ocr_missing"
+					return item
+				case e == account4399.ErrCaptchaFailed:
+					item.Status = "captcha_fail"
+					if attempt < maxRetries-1 {
+						time.Sleep(2 * time.Second)
 					}
 					continue
 				case e == account4399.ErrInvalidRegisterInput:
@@ -450,6 +459,15 @@ func doOneRegister(ctx context.Context, idx int, req *BatchRegisterReq) *BatchRe
 				sfz = popRandomSFZ()
 				item.SFZName = sfz.Name
 				item.SFZNumber = sfz.Number
+				continue
+			case errors.Is(err, account4399.ErrCaptchaEngineNotReady):
+				item.Status = "ocr_missing"
+				return item
+			case err == account4399.ErrCaptchaFailed:
+				item.Status = "captcha_fail"
+				if attempt < maxRetries-1 {
+					time.Sleep(2 * time.Second)
+				}
 				continue
 			case err == account4399.ErrRiskControlTriggered:
 				item.Status = "risk_control"
@@ -554,7 +572,7 @@ func HandleBatchRegister(c *gin.Context) {
 	sem := make(chan struct{}, req.Concurrency)
 	var wg sync.WaitGroup
 	var okCnt, failCnt int32
-	var sfzLimitCnt, sfzFreqCnt, captchaCnt, userExistCnt, riskCnt int32
+	var sfzLimitCnt, sfzFreqCnt, captchaCnt, ocrMissingCnt, userExistCnt, riskCnt int32
 
 	results := make([]*BatchRegisterResultItem, req.Count)
 	for i := 0; i < req.Count; i++ {
@@ -582,6 +600,9 @@ func HandleBatchRegister(c *gin.Context) {
 			case "captcha_fail":
 				atomic.AddInt32(&captchaCnt, 1)
 				atomic.AddInt32(&failCnt, 1)
+			case "ocr_missing":
+				atomic.AddInt32(&ocrMissingCnt, 1)
+				atomic.AddInt32(&failCnt, 1)
 			case "username_exist":
 				atomic.AddInt32(&userExistCnt, 1)
 				atomic.AddInt32(&failCnt, 1)
@@ -605,6 +626,7 @@ func HandleBatchRegister(c *gin.Context) {
 			"sfz_limit":       sfzLimitCnt,
 			"sfz_freq":        sfzFreqCnt,
 			"captcha_fail":    captchaCnt,
+			"ocr_missing":     ocrMissingCnt,
 			"username_exist":  userExistCnt,
 			"risk_control":    riskCnt,
 		},

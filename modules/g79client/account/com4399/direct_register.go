@@ -195,6 +195,7 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 	httpc := newDirectHTTPClient(req.Transport)
 
 	// 获取并识别验证码（最多重试 3 次）
+	// 注意：识别失败直接返回错误，禁止使用随机值蒙混——验证码错误会被 4399 风控标记
 	captcha := req.Captcha
 	if captcha == "" {
 		var lastErr error
@@ -213,6 +214,10 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 			recognized, err := RecognizeCaptchaBytes(captchaImg)
 			if err != nil {
 				lastErr = err
+				if errors.Is(err, ErrCaptchaEngineNotReady) {
+					// OCR 引擎未就绪，无需再重试
+					break
+				}
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
@@ -222,12 +227,11 @@ func DirectRegister(ctx context.Context, req *DirectRegisterRequest) (*DirectReg
 			}
 			lastErr = fmt.Errorf("识别结果 %q 不是 4 位，重试", recognized)
 			time.Sleep(400 * time.Millisecond)
-			// 换一个 sid
 			sid = randomSessionID()
 		}
 		if captcha == "" {
-			captcha = randomString(capAlphabet, 4)
-			log.Printf("[4399-Direct] 验证码识别失败 %v，退而使用随机值 %s", lastErr, captcha)
+			log.Printf("[4399-Direct] 验证码识别失败（放弃本次注册）: %v", lastErr)
+			return nil, fmt.Errorf("%w: %v", ErrCaptchaFailed, lastErr)
 		}
 	}
 
@@ -510,7 +514,8 @@ func DirectLoginSAuth(ctx context.Context, req *DirectRegisterRequest) (string, 
 			if rec, e2 := RecognizeCaptchaBytes(capImg); e2 == nil && len(rec) == 4 {
 				captcha = strings.ToLower(rec)
 			} else {
-				captcha = randomString(capAlphabet, 4)
+				log.Printf("[4399-DirectLogin] 登录阶段验证码识别失败: cap=%v ocr=%v — 取消本次登录（不使用随机值避免风控）", e, e2)
+				return "", fmt.Errorf("%w: 登录验证码识别失败 capImgErr=%v ocrErr=%v", ErrCaptchaFailed, e, e2)
 			}
 		}
 	}
