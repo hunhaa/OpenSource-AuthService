@@ -39,6 +39,15 @@ type User struct {
 	IsX19           bool       `gorm:"column:isX19;type:tinyint(1);not null;default:true" json:"isX19"`
 	NicknamePrefix  string     `gorm:"column:nickname_prefix;type:varchar(50);default:'HZ'" json:"nickname_prefix"`
 	EndTime         *time.Time `gorm:"column:end_time;type:datetime" json:"end_time"`
+	// 用户中心扩展字段（向后兼容，默认值不影响历史数据）
+	Nickname  string     `gorm:"column:nickname;type:varchar(64);default:''" json:"nickname"`
+	AvatarURL string     `gorm:"column:avatar_url;type:varchar(512);default:''" json:"avatar_url"`
+	Bio       string     `gorm:"column:bio;type:varchar(1024);default:''" json:"bio"`
+	Quota     int64      `gorm:"column:quota;type:bigint;not null;default:0" json:"quota"`
+	Times     int64      `gorm:"column:times;type:bigint;not null;default:0" json:"times"`
+	IsBanned  bool       `gorm:"column:is_banned;type:tinyint(1);not null;default:0" json:"is_banned"`
+	CreatedAt *time.Time `gorm:"column:created_at;type:datetime" json:"created_at"`
+	UpdatedAt *time.Time `gorm:"column:updated_at;type:datetime" json:"updated_at"`
 }
 
 func (User) TableName() string {
@@ -118,6 +127,11 @@ func InitDBWithOptions(options InitOptions) error {
 		return fmt.Errorf("migrate account table: %w", err)
 	}
 
+	// 用户中心新增表（向后兼容：仅创建不存在的表，已有列保持原样）
+	if err := autoMigrateUserCenterTables(); err != nil {
+		return fmt.Errorf("migrate usercenter tables: %w", err)
+	}
+
 	//表已经全部存在无需迁移
 	//DB.AutoMigrate(...)
 
@@ -168,29 +182,54 @@ func fixUsersTable() error {
 		return nil
 	}
 
+	// 1) 兼容历史：isX19 / is_x19 列
 	var exactColumnExists bool
 	DB.Raw("SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'isX19'").Scan(&exactColumnExists)
-	if exactColumnExists {
-		return nil
-	}
-
-	var snakeColumnExists bool
-	DB.Raw("SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'is_x19'").Scan(&snakeColumnExists)
-	if snakeColumnExists {
-		fmt.Println("[DB] Detected users.is_x19 column, renaming to isX19...")
-		if err := DB.Exec("ALTER TABLE users CHANGE COLUMN is_x19 isX19 tinyint(1) NOT NULL DEFAULT 1").Error; err != nil {
-			return fmt.Errorf("failed to rename users.is_x19 column to isX19: %v", err)
+	if !exactColumnExists {
+		var snakeColumnExists bool
+		DB.Raw("SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'is_x19'").Scan(&snakeColumnExists)
+		if snakeColumnExists {
+			fmt.Println("[DB] Detected users.is_x19 column, renaming to isX19...")
+			if err := DB.Exec("ALTER TABLE users CHANGE COLUMN is_x19 isX19 tinyint(1) NOT NULL DEFAULT 1").Error; err != nil {
+				return fmt.Errorf("failed to rename users.is_x19 column to isX19: %v", err)
+			}
+			fmt.Println("[DB] Renamed users.is_x19 column to isX19")
+		} else {
+			fmt.Println("[DB] Detected missing users.isX19 column, adding...")
+			if err := DB.Exec("ALTER TABLE users ADD COLUMN isX19 tinyint(1) NOT NULL DEFAULT 1 AFTER auto_change_sauth").Error; err != nil {
+				return fmt.Errorf("failed to add users.isX19 column: %v", err)
+			}
+			fmt.Println("[DB] Added users.isX19 column")
 		}
-		fmt.Println("[DB] Renamed users.is_x19 column to isX19")
-		return nil
 	}
 
-	fmt.Println("[DB] Detected missing users.isX19 column, adding...")
-	if err := DB.Exec("ALTER TABLE users ADD COLUMN isX19 tinyint(1) NOT NULL DEFAULT 1 AFTER auto_change_sauth").Error; err != nil {
-		return fmt.Errorf("failed to add users.isX19 column: %v", err)
+	// 2) 用户中心扩展列：逐列检测，不存在则 ADD COLUMN（保留历史数据）
+	type colDef struct {
+		name string
+		ddl  string
 	}
-
-	fmt.Println("[DB] Added users.isX19 column")
+	extendCols := []colDef{
+		{"nickname", "ALTER TABLE users ADD COLUMN nickname VARCHAR(64) NOT NULL DEFAULT ''"},
+		{"avatar_url", "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(512) NOT NULL DEFAULT ''"},
+		{"bio", "ALTER TABLE users ADD COLUMN bio VARCHAR(1024) NOT NULL DEFAULT ''"},
+		{"quota", "ALTER TABLE users ADD COLUMN quota BIGINT NOT NULL DEFAULT 0 COMMENT '用户额度'"},
+		{"times", "ALTER TABLE users ADD COLUMN times BIGINT NOT NULL DEFAULT 0 COMMENT '用户次数'"},
+		{"is_banned", "ALTER TABLE users ADD COLUMN is_banned TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否封禁'"},
+		{"created_at", "ALTER TABLE users ADD COLUMN created_at DATETIME NULL"},
+		{"updated_at", "ALTER TABLE users ADD COLUMN updated_at DATETIME NULL"},
+	}
+	for _, c := range extendCols {
+		var exists bool
+		DB.Raw("SELECT COUNT(*) > 0 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?", c.name).Scan(&exists)
+		if exists {
+			continue
+		}
+		fmt.Printf("[DB] Detected missing users.%s column, adding...\n", c.name)
+		if err := DB.Exec(c.ddl).Error; err != nil {
+			return fmt.Errorf("failed to add users.%s column: %v", c.name, err)
+		}
+		fmt.Printf("[DB] Added users.%s column\n", c.name)
+	}
 	return nil
 }
 

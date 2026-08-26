@@ -18,6 +18,7 @@ import (
 	"github.com/Yeah114/FunAuth/internal/db"
 	"github.com/Yeah114/FunAuth/internal/portkit"
 	"github.com/gin-gonic/gin"
+	uc "github.com/Yeah114/FunAuth/modules/usercenter"
 	webui "github.com/Yeah114/FunAuth/modules/webui"
 	g79client "github.com/Yeah114/g79client"
 )
@@ -156,6 +157,9 @@ func buildGinRouter(withPhoenix, withWebUI bool) *gin.Engine {
 	case withWebUI:
 		webui.RegisterRoutes(api, r)
 	}
+	// 用户中心（API: /api/usercenter/*；前端 SPA: /uc/）
+	// 始终注册，独立于 webui/phoenix
+	uc.RegisterRoutes(api, r)
 	return r
 }
 
@@ -170,6 +174,8 @@ func runWebUIOnly(args []string) error {
 	_ = r.SetTrustedProxies([]string{"127.0.0.1"})
 	api := r.Group("/api")
 	webui.RegisterRoutes(api, r)
+	// 用户中心（API: /api/usercenter/*；前端 SPA: /uc/）
+	uc.RegisterRoutes(api, r)
 
 	listen := *addr
 	if listen == "" {

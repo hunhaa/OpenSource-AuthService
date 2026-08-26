@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/Yeah114/FunAuth/internal/handlers"
+	uc "github.com/Yeah114/FunAuth/modules/usercenter"
 	webui "github.com/Yeah114/FunAuth/modules/webui"
 )
 
@@ -28,6 +29,9 @@ func NewRouter() *gin.Engine {
 	// 因此：只要挂 WebUI，就不再重复挂 handlers 的同名路由，避免 gin panic "handlers are already registered"。
 	// 同时 handlers 的 Phoenix 功能（fixed cookie phoenix_login 等）在 WebUI 里已经有等价实现。
 	webui.RegisterRoutes(api, r)
+
+	// 用户中心（API: /api/usercenter/*；前端 SPA: /uc/）
+	uc.RegisterRoutes(api, r)
 
 	// 未被 WebUI 占用的 Phoenix 扩展（tan_lobby_*、transfer_* 等）仍然挂 handlers。
 	// 注意：RegisterPhoenixRoutes 内部已按路由粒度去重不可能，只能在注册前先检查。
