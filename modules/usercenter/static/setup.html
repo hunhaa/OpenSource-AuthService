@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FunAuth 首次配置向导</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus@2.4.4/dist/index.css" />
+  <link rel="stylesheet" href="https://unpkg.com/element-plus@2.4.4/dist/dark/css-vars.css" />
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --surface: #fff;
+      --text: #1f2937;
+      --primary: #3b82f6;
+      --border: #e5e7eb;
+      --muted: #6b7280;
+    }
+    html[data-theme="dark"] {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --text: #e5e7eb;
+      --primary: #60a5fa;
+      --border: #334155;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrapper {
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px 16px;
+      background: radial-gradient(1200px 600px at 20% 10%, color-mix(in srgb, var(--primary) 14%, transparent), transparent 60%),
+                  radial-gradient(800px 400px at 80% 90%, color-mix(in srgb, #8b5cf6 14%, transparent), transparent 60%);
+    }
+    .card {
+      width: 100%; max-width: 560px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 28px;
+      box-shadow: 0 20px 60px rgba(15, 23, 42, .2);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+    .brand .logo {
+      width: 42px; height: 42px; border-radius: 12px;
+      background: linear-gradient(135deg, var(--primary), #8b5cf6);
+      color: #fff; display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 20px;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, .35);
+    }
+    .brand .title { font-size: 18px; font-weight: 700; }
+    .brand .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .step-bar { margin-bottom: 24px; }
+    .form-actions { display: flex; justify-content: space-between; margin-top: 20px; gap: 10px; }
+    .form-actions .spacer { flex: 1; }
+    .step-title { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+    .step-desc { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+    .el-input__wrapper, .el-textarea__inner {
+      background: var(--bg) !important;
+      box-shadow: 0 0 0 1px var(--border) inset !important;
+    }
+    .theme-fab {
+      position: fixed; top: 16px; right: 16px; z-index: 30;
+    }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+    .ok-tip {
+      background: color-mix(in srgb, #10b981 14%, transparent);
+      border: 1px solid color-mix(in srgb, #10b981 40%, transparent);
+      border-radius: 10px; padding: 16px; margin-top: 10px;
+    }
+    .ok-tip h3 { margin: 0 0 6px; color: #10b981; font-size: 15px; }
+    .ok-tip p { margin: 4px 0; font-size: 13px; }
+    code.cmd {
+      background: var(--bg); padding: 2px 8px; border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <el-button class="theme-fab" circle @click="toggleTheme">
+      <span style="font-size:18px">{{ theme === 'light' ? '🌙' : '☀️' }}</span>
+    </el-button>
+    <div class="wrapper">
+      <div class="card">
+        <div class="brand">
+          <div class="logo">F</div>
+          <div>
+            <div class="title">FunAuth 用户中心</div>
+            <div class="sub">首次配置向导 · Setup Wizard</div>
+          </div>
+        </div>
+
+        <el-steps :active="step" finish-status="success" align-center class="step-bar">
+          <el-step title="数据库"></el-step>
+          <el-step title="管理员"></el-step>
+          <el-step title="网站信息"></el-step>
+          <el-step title="完成"></el-step>
+        </el-steps>
+
+        <!-- Step 1: 数据库 -->
+        <div v-show="step === 0">
+          <h3 class="step-title">配置 MySQL 数据库</h3>
+          <p class="step-desc">请填入 MySQL 连接信息。FunAuth 会自动建库、建表，无需手动初始化。</p>
+          <el-form :model="dbForm" label-position="top">
+            <el-form-item label="主机地址">
+              <el-input v-model="dbForm.db_host" placeholder="127.0.0.1"></el-input>
+            </el-form-item>
+            <el-form-item label="端口">
+              <el-input-number v-model="dbForm.db_port" :min="1" :max="65535" style="width:100%"></el-input-number>
+            </el-form-item>
+            <el-form-item label="用户名">
+              <el-input v-model="dbForm.db_user" placeholder="root / funauth"></el-input>
+            </el-form-item>
+            <el-form-item label="密码">
+              <el-input v-model="dbForm.db_password" type="password" show-password placeholder="数据库用户密码"></el-input>
+            </el-form-item>
+            <el-form-item label="数据库名">
+              <el-input v-model="dbForm.db_name" placeholder="funauth"></el-input>
+              <div class="hint">数据库不存在时会自动创建（要求用户有 CREATE 权限）。</div>
+            </el-form-item>
+          </el-form>
+          <div class="form-actions">
+            <el-button @click="testDB" :loading="testing">🔍 测试连接</el-button>
+            <div class="spacer"></div>
+            <el-button type="primary" @click="nextStep">下一步 →</el-button>
+          </div>
+        </div>
+
+        <!-- Step 2: 管理员 -->
+        <div v-show="step === 1">
+          <h3 class="step-title">创建管理员账号</h3>
+          <p class="step-desc">这是登录用户中心后台的超级管理员账号，将自动加入"管理员"组（含全部权限）。</p>
+          <el-form :model="adminForm" label-position="top">
+            <el-form-item label="管理员用户名">
+              <el-input v-model="adminForm.admin_username" placeholder="admin（3-50 字符）"></el-input>
+            </el-form-item>
+            <el-form-item label="管理员密码">
+              <el-input v-model="adminForm.admin_password" type="password" show-password placeholder="至少 6 位"></el-input>
+            </el-form-item>
+            <el-form-item label="确认密码">
+              <el-input v-model="adminPasswordConfirm" type="password" show-password placeholder="再输一次"></el-input>
+            </el-form-item>
+            <el-form-item label="联系邮箱（可选）">
+              <el-input v-model="adminForm.admin_email" placeholder="admin@example.com"></el-input>
+            </el-form-item>
+          </el-form>
+          <div class="form-actions">
+            <el-button @click="step = 0">← 上一步</el-button>
+            <div class="spacer"></div>
+            <el-button type="primary" @click="nextStep">下一步 →</el-button>
+          </div>
+        </div>
+
+        <!-- Step 3: 网站信息 -->
+        <div v-show="step === 2">
+          <h3 class="step-title">网站基本信息</h3>
+          <p class="step-desc">这些信息将显示在用户中心顶部和登录页（后续可在管理后台修改）。</p>
+          <el-form :model="siteForm" label-position="top">
+            <el-form-item label="站点名称">
+              <el-input v-model="siteForm.site_name" placeholder="FunAuth 用户中心"></el-input>
+            </el-form-item>
+            <el-form-item label="副标题 / Slogan">
+              <el-input v-model="siteForm.subtitle" placeholder="现代化用户管理系统"></el-input>
+            </el-form-item>
+            <el-form-item label="Logo URL（可选）">
+              <el-input v-model="siteForm.logo_url" placeholder="https://example.com/logo.png"></el-input>
+            </el-form-item>
+            <el-form-item label="页脚文案（可选）">
+              <el-input v-model="siteForm.footer_text" type="textarea" :rows="2"
+                placeholder="© 2026 YourOrg · Powered by FunAuth"></el-input>
+            </el-form-item>
+          </el-form>
+          <div class="form-actions">
+            <el-button @click="step = 1">← 上一步</el-button>
+            <div class="spacer"></div>
+            <el-button type="primary" @click="submitAll" :loading="submitting">✓ 完成配置</el-button>
+          </div>
+        </div>
+
+        <!-- Step 4: 完成 -->
+        <div v-show="step === 3">
+          <div class="ok-tip">
+            <h3>✓ 配置完成</h3>
+            <p>已写入 <code class="cmd">config.json</code>，并完成：</p>
+            <p>· 数据库表结构初始化</p>
+            <p>· 创建管理员账号 <strong>{{ adminForm.admin_username }}</strong></p>
+            <p>· 创建默认身份组（管理员 / 普通用户）</p>
+            <p>· 保存网站信息</p>
+          </div>
+          <p style="margin-top:14px; font-size:14px;">下一步：重启本程序进入正常服务模式。</p>
+          <div class="form-actions">
+            <div class="spacer"></div>
+            <el-button type="primary" @click="reloadHint">查看启动方式</el-button>
+          </div>
+
+          <el-dialog v-model="hintVisible" title="启动方式" width="540">
+            <p>在程序所在目录执行：</p>
+            <pre style="background:#f5f7fa;padding:10px;border-radius:6px;overflow:auto;font-size:13px"># 1. 先启动 funauth 主程序（Bunker 控制台）
+./funauth-linux-amd64 serve
+
+# 2. 再启动 usercenter（用户中心，同一数据库）
+./usercenter-linux-amd64</pre>
+            <p style="margin-top:10px;font-size:13px;color:var(--muted)">
+              访问 <code class="cmd">http://localhost:8090/uc/</code> 进入用户中心，
+              用刚创建的管理员账号登录即可进入后台。
+            </p>
+          </el-dialog>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/element-plus@2.4.4"></script>
+  <script src="https://unpkg.com/element-plus@2.4.4/dist/locale/zh-cn.js"></script>
+  <script>
+    const { createApp, reactive, ref, computed } = Vue;
+
+    const app = createApp({
+      setup() {
+        const step = ref(0);
+        const testing = ref(false);
+        const submitting = ref(false);
+        const theme = ref(localStorage.getItem('theme') || 'light');
+        const hintVisible = ref(false);
+
+        const dbForm = reactive({
+          db_host: '127.0.0.1',
+          db_port: 3306,
+          db_user: 'root',
+          db_password: '',
+          db_name: 'funauth'
+        });
+        const adminForm = reactive({
+          admin_username: 'admin',
+          admin_password: '',
+          admin_email: ''
+        });
+        const adminPasswordConfirm = ref('');
+        const siteForm = reactive({
+          site_name: 'FunAuth 用户中心',
+          subtitle: '现代化用户管理系统',
+          logo_url: '',
+          footer_text: '© 2026 Powered by FunAuth'
+        });
+
+        function applyTheme(name) {
+          document.documentElement.setAttribute('data-theme', name);
+          localStorage.setItem('theme', name);
+        }
+        applyTheme(theme.value);
+        function toggleTheme() {
+          theme.value = theme.value === 'light' ? 'dark' : 'light';
+          applyTheme(theme.value);
+        }
+
+        function nextStep() {
+          if (step.value === 0) {
+            if (!dbForm.db_host || !dbForm.db_user || !dbForm.db_name) {
+              ElementPlus.ElMessage.warning('请填完数据库信息');
+              return;
+            }
+          }
+          if (step.value === 1) {
+            if (!adminForm.admin_username || adminForm.admin_username.length < 3) {
+              ElementPlus.ElMessage.warning('管理员用户名至少 3 位');
+              return;
+            }
+            if (!adminForm.admin_password || adminForm.admin_password.length < 6) {
+              ElementPlus.ElMessage.warning('管理员密码至少 6 位');
+              return;
+            }
+            if (adminForm.admin_password !== adminPasswordConfirm.value) {
+              ElementPlus.ElMessage.warning('两次密码不一致');
+              return;
+            }
+          }
+          step.value = Math.min(3, step.value + 1);
+        }
+
+        async function testDB() {
+          testing.value = true;
+          try {
+            const res = await fetch('/api/setup/test-db', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(dbForm)
+            });
+            const data = await res.json();
+            if (data.ok) {
+              ElementPlus.ElMessage.success(data.msg + (data.data && data.data.version ? '（' + data.data.version + '）' : ''));
+            } else {
+              ElementPlus.ElMessage.error(data.msg || '连接失败');
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求失败: ' + e.message);
+          } finally {
+            testing.value = false;
+          }
+        }
+
+        async function submitAll() {
+          submitting.value = true;
+          try {
+            const body = Object.assign({}, dbForm, adminForm, siteForm);
+            const res = await fetch('/api/setup', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            if (data.ok) {
+              ElementPlus.ElMessage.success('初始化完成');
+              step.value = 3;
+            } else {
+              ElementPlus.ElMessage.error(data.msg || '初始化失败');
+            }
+          } catch (e) {
+            ElementPlus.ElMessage.error('请求失败: ' + e.message);
+          } finally {
+            submitting.value = false;
+          }
+        }
+
+        function reloadHint() {
+          hintVisible.value = true;
+        }
+
+        return {
+          step, testing, submitting, theme,
+          dbForm, adminForm, adminPasswordConfirm, siteForm,
+          hintVisible,
+          toggleTheme, nextStep, testDB, submitAll, reloadHint
+        };
+      }
+    });
+    app.use(ElementPlus, { locale: ElementPlusLocaleZhCn });
+    app.mount('#app');
+  </script>
+</body>
+</html>

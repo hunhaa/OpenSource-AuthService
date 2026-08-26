@@ -96,6 +96,7 @@
   const store = reactive({
     user: null,
     sidebarOpen: false,
+    site: { site_name: 'FunAuth 用户中心', subtitle: '现代化用户管理系统', logo_url: '', footer_text: '© Powered by FunAuth' },
     get isAdmin() {
       const u = this.user;
       if (!u || !u.groups) return false;
@@ -106,6 +107,17 @@
     },
     get loggedIn() { return !!localStorage.getItem('token'); }
   });
+
+  // 拉取站点信息（health 接口附带）
+  async function loadSiteInfo() {
+    try {
+      const data = await api('GET', '/health');
+      if (data && data.site) {
+        store.site = Object.assign({}, store.site, data.site);
+        document.title = store.site.site_name + ' · 用户中心';
+      }
+    } catch (e) { /* 静默失败，使用默认值 */ }
+  }
 
   /* ---------- 主题 ---------- */
   function applyTheme(name) {
@@ -154,8 +166,8 @@
         {{ theme === 'dark' ? '\u2600\ufe0f' : '\ud83c\udf19' }}
       </button>
       <div class="login-card">
-        <h2>FunAuth 用户中心</h2>
-        <div class="sub">登录以管理你的卡槽、钱包与额度</div>
+        <h2>{{ site.site_name }}</h2>
+        <div class="sub">{{ site.subtitle || '登录以管理你的卡槽、钱包与额度' }}</div>
         <el-form :model="form" label-position="top" @submit.prevent="onLogin">
           <el-form-item label="用户名">
             <el-input v-model="form.username" placeholder="请输入用户名" autocomplete="username" clearable></el-input>
@@ -1967,6 +1979,7 @@
 
   /* ---------- 启动 ---------- */
   initTheme();
+  loadSiteInfo();
   const app = createApp(App);
   app.use(ElementPlus, { locale: window.ElementPlusLocaleZhCn });
   app.mount('#app');

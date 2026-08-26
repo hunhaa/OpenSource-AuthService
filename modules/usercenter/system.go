@@ -1,6 +1,7 @@
 package usercenter
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -50,13 +51,40 @@ func invalidateSystemSettings() {
 }
 
 // HandleHealth GET /api/usercenter/health
+// 顺带返回站点信息（让前端登录页能直接展示站点名）
 func HandleHealth(c *gin.Context) {
+	ss := loadSystemSettings()
+	site := parseSiteInfo(ss.ExtraConfig)
 	ok(c, gin.H{
 		"ok":      true,
 		"status":  "ok",
 		"version": "funauth-usercenter",
 		"time":    time.Now().Format(time.RFC3339),
+		"site":    site,
 	})
+}
+
+// parseSiteInfo 从 system_settings.extra_config JSON 中解析站点信息
+func parseSiteInfo(extraJSON string) gin.H {
+	out := gin.H{
+		"site_name":   "FunAuth 用户中心",
+		"subtitle":    "现代化用户管理系统",
+		"logo_url":    "",
+		"footer_text": "© Powered by FunAuth",
+	}
+	if extraJSON == "" {
+		return out
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(extraJSON), &m); err != nil {
+		return out
+	}
+	for k := range out {
+		if v, ok := m[k]; ok && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // HandleAdminGetSystemSettings GET /api/usercenter/admin/system-settings
