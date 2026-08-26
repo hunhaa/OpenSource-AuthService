@@ -13,7 +13,7 @@ import (
 type Group struct {
 	ID          uint      `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name        string    `gorm:"column:name;type:varchar(128);not null;uniqueIndex" json:"name"`
-	Permissions string    `gorm:"column:permissions;type:text;not null;default:'[]'" json:"permissions"`
+	Permissions string    `gorm:"column:permissions;type:text;not null" json:"permissions"`
 	Description string    `gorm:"column:description;type:varchar(255)" json:"description"`
 	IsDefault   bool      `gorm:"column:is_default;type:tinyint(1);not null;default:0" json:"is_default"`
 	SortOrder   int       `gorm:"column:sort_order;type:int;not null;default:0" json:"sort_order"`
@@ -69,7 +69,7 @@ type Product struct {
 	ImageURL    string    `gorm:"column:image_url;type:varchar(512)" json:"image_url"`
 	IsActive    bool      `gorm:"column:is_active;type:tinyint(1);not null;default:1" json:"is_active"`
 	SortOrder   int       `gorm:"column:sort_order;type:int;not null;default:0" json:"sort_order"`
-	ExtraConfig string    `gorm:"column:extra_config;type:text;not null;default:'{}'" json:"extra_config"`
+	ExtraConfig string    `gorm:"column:extra_config;type:text;not null" json:"extra_config"`
 	Stock       int64     `gorm:"column:stock;type:bigint;not null;default:-1" json:"stock"`
 	CreatedAt   time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt   time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP" json:"updated_at"`
@@ -83,7 +83,7 @@ type Category struct {
 	Name            string    `gorm:"column:name;type:varchar(128);not null;uniqueIndex" json:"name"`
 	SortOrder       int       `gorm:"column:sort_order;type:int;not null;default:0" json:"sort_order"`
 	IsActive        bool      `gorm:"column:is_active;type:tinyint(1);not null;default:1" json:"is_active"`
-	VisibleGroupIDs string    `gorm:"column:visible_group_ids;type:text;not null;default:'[]'" json:"visible_group_ids"`
+	VisibleGroupIDs string    `gorm:"column:visible_group_ids;type:text;not null" json:"visible_group_ids"`
 	CreatedAt       time.Time `gorm:"column:created_at;type:datetime;not null;default:CURRENT_TIMESTAMP" json:"created_at"`
 	UpdatedAt       time.Time `gorm:"column:updated_at;type:datetime;not null;default:CURRENT_TIMESTAMP" json:"updated_at"`
 }
@@ -203,6 +203,30 @@ type TimesTransaction struct {
 }
 
 func (TimesTransaction) TableName() string { return "times_transactions" }
+
+// BeforeCreate 钩子：为 TEXT 类型 JSON 字段补默认值（MariaDB 严格模式下 TEXT 列不能设 DEFAULT 字面值，
+// 这里在代码层保证业务默认值，避免 NOT NULL 违反及 JSON 解析失败）
+
+func (g *Group) BeforeCreate(tx *gorm.DB) error {
+	if g.Permissions == "" {
+		g.Permissions = "[]"
+	}
+	return nil
+}
+
+func (p *Product) BeforeCreate(tx *gorm.DB) error {
+	if p.ExtraConfig == "" {
+		p.ExtraConfig = "{}"
+	}
+	return nil
+}
+
+func (c *Category) BeforeCreate(tx *gorm.DB) error {
+	if c.VisibleGroupIDs == "" {
+		c.VisibleGroupIDs = "[]"
+	}
+	return nil
+}
 
 // autoMigrateUserCenterTables 创建用户中心所需的全部表（仅 CREATE TABLE IF NOT EXISTS，已存在表保持原样）
 func autoMigrateUserCenterTables() error {
