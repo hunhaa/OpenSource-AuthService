@@ -111,8 +111,28 @@ func runServe(args []string) error {
 	noPhoenix := fs.Bool("no-phoenix", false, "只跑 WebUI，不挂 Phoenix 验证端点")
 	addr := fs.String("addr", "", "监听地址")
 	withWebUI := fs.Bool("with-webui", true, "是否挂载 WebUI 控制台（和 --no-webui 相反）")
+	forceSetup := fs.Bool("setup", false, "强制进入 Web 配置向导模式（首次配置数据库 / 管理员 / 网站信息）")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	listen := *addr
+	if listen == "" {
+		listen = os.Getenv("FUNAUTH_ADDR")
+	}
+	if listen == "" {
+		listen = ":8090"
+	}
+
+	// 首次配置检测：未就绪或显式 --setup → 启动 Web 配置向导
+	if !*noDB && (*forceSetup || !db.IsConfigReady()) {
+		fmt.Print(banner)
+		fmt.Printf("\n[setup] 数据库未配置或显式 --setup，启动 Web 配置向导：\n")
+		fmt.Printf("[setup] 访问 http://localhost%s/ 完成首次配置\n", portkit.PrettyAddr(listen))
+		fmt.Printf("[setup] 完成后会写入 config.json 并初始化数据库、创建管理员账号\n")
+		fmt.Printf("[setup] 之后请重启本程序进入正常服务模式\n\n")
+		portkit.FreePortLinuxFromAddr(listen)
+		return runSetupServer(listen)
 	}
 
 	if !*noDB {
@@ -127,20 +147,31 @@ func runServe(args []string) error {
 
 	r := buildGinRouter(*noPhoenix, *withWebUI && !*noUI)
 
-	listen := *addr
-	if listen == "" {
-		listen = os.Getenv("FUNAUTH_ADDR")
-	}
-	if listen == "" {
-		listen = ":8090"
-	}
 	portkit.FreePortLinuxFromAddr(listen)
 
 	fmt.Print(banner)
 	log.Printf("[serve] listening on %s (db=%v phoenix=%v webui=%v)",
 		listen, !*noDB, !*noPhoenix, *withWebUI && !*noUI)
 	log.Printf("[serve] WebUI: http://localhost%s/ui/", portkit.PrettyAddr(listen))
+	log.Printf("[serve] 用户中心: http://localhost%s/uc/", portkit.PrettyAddr(listen))
 	return r.Run(listen)
+}
+
+// runSetupServer 启动 Web 配置向导服务（独立于正式业务路由）
+func runSetupServer(addr string) error {
+	r := gin.New()
+	r.Use(gin.Logger(), gin.Recovery())
+	_ = r.SetTrustedProxies([]string{"127.0.0.1"})
+
+	// 挂载 setup 路由（页面 + API）
+	uc.RegisterSetupRoutes(r)
+
+	// 根路径重定向到 /setup
+	r.GET("/", func(c *gin.Context) {
+		c.Redirect(302, "/setup")
+	})
+
+	return r.Run(addr)
 }
 
 func buildGinRouter(withPhoenix, withWebUI bool) *gin.Engine {

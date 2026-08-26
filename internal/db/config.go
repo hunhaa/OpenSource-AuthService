@@ -269,6 +269,30 @@ func firstPositive(x, fallback int) int {
 	return fallback
 }
 
+// IsConfigReady 判断数据库配置是否就绪（可用于启动时决定是否进入 web setup 向导）
+// 优先级：FUNAUTH_MYSQL_DSN 环境变量 > config.json
+// 都没有，或仍是占位"密码"，则视为未就绪
+func IsConfigReady() bool {
+	if strings.TrimSpace(os.Getenv("FUNAUTH_MYSQL_DSN")) != "" {
+		return true
+	}
+	if strings.TrimSpace(dsnOverride) != "" {
+		return true
+	}
+	cfg, err := LoadConfig()
+	if err != nil || cfg == nil {
+		return false
+	}
+	dsn := ResolveDSN(cfg)
+	if strings.Contains(dsn, ":密码@") {
+		return false
+	}
+	if cfg.MySQL.Host == "" && cfg.MySQL.Username == "" && strings.TrimSpace(cfg.MySQL.DSN) == "" {
+		return false
+	}
+	return true
+}
+
 // -------- minimal isatty --------
 // 避免引入 golang.org/x/term 依赖
 func isTerminal(fd int) bool {

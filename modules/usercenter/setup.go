@@ -222,6 +222,12 @@ func handleSetup(c *gin.Context) {
 	// 3) 初始化数据库（建表 / 修列）
 	// 关闭旧连接，让 InitDBWithOptions 重新打开
 	db.SetDSNOverride(dsn)
+	// 先用临时连接创建 4 张"复用表"（users/slots/idcode/sauth）
+	// 这些表不在 AutoMigrate 列表里，全新数据库需要显式建
+	if err := gdb.AutoMigrate(&db.User{}, &db.Slot{}, &db.IDCode{}, &db.SauthPool{}); err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "msg": "创建基础表失败: " + err.Error()})
+		return
+	}
 	if err := db.InitDBWithOptions(db.InitOptions{StartCom4399AccountPool: false}); err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "msg": "初始化数据库失败: " + err.Error()})
 		return
