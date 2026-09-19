@@ -182,7 +182,7 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 	}
 
 	// 静态控制台 & 根跳转 挂在根路径，不重复加 /api 前缀
-	// 所有路由都用显式 GET，避免重定向循环
+	// 注意：gin 不允许同时注册 /ui/ 和 /ui/*filepath，只用通配符
 	if engine != nil {
 		staticRoot, err := fs.Sub(StaticFS, "static")
 		if err != nil {
@@ -210,17 +210,7 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 			fileServer.ServeHTTP(c.Writer, c.Request)
 		})
 
-		// /ui 和 /ui/ 直接返回 index.html
-		engine.GET("/ui", func(c *gin.Context) {
-			c.Request.URL.Path = "/index.html"
-			fileServer.ServeHTTP(c.Writer, c.Request)
-		})
-		engine.GET("/ui/", func(c *gin.Context) {
-			c.Request.URL.Path = "/index.html"
-			fileServer.ServeHTTP(c.Writer, c.Request)
-		})
-
-		// /ui/* 静态资源
+		// /ui 通配符：覆盖 /ui、/ui/、/ui/style.css 等所有路径
 		engine.GET("/ui/*filepath", func(c *gin.Context) {
 			fp := c.Param("filepath")
 			if fp == "" || fp == "/" {
@@ -238,14 +228,6 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		fileServer := http.FileServer(http.FS(staticRoot))
 
 		api.GET("/", func(c *gin.Context) {
-			c.Request.URL.Path = "/index.html"
-			fileServer.ServeHTTP(c.Writer, c.Request)
-		})
-		api.GET("/ui", func(c *gin.Context) {
-			c.Request.URL.Path = "/index.html"
-			fileServer.ServeHTTP(c.Writer, c.Request)
-		})
-		api.GET("/ui/", func(c *gin.Context) {
 			c.Request.URL.Path = "/index.html"
 			fileServer.ServeHTTP(c.Writer, c.Request)
 		})
