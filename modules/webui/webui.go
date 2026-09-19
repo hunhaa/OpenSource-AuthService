@@ -182,7 +182,7 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 	}
 
 	// 静态控制台 & 根跳转 挂在根路径，不重复加 /api 前缀
-	// 不用 gin.StaticFS（会与 NoRoute 冲突），改用自定义 handler 统一处理
+	// 所有路由都用显式 GET，避免重定向循环
 	if engine != nil {
 		staticRoot, err := fs.Sub(StaticFS, "static")
 		if err != nil {
@@ -204,25 +204,30 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 			c.JSON(200, gin.H{"files": files})
 		})
 
-		// 首页重定向到 /ui/
+		// 首页直接返回 index.html（不重定向，避免循环）
 		engine.GET("/", func(c *gin.Context) {
-			c.Redirect(http.StatusMovedPermanently, "/ui/")
+			c.Request.URL.Path = "/index.html"
+			fileServer.ServeHTTP(c.Writer, c.Request)
 		})
 
-		// 用 NoRoute 统一处理 /ui/* 静态文件和 SPA 路由
-		engine.NoRoute(func(c *gin.Context) {
-			path := c.Request.URL.Path
-			if strings.HasPrefix(path, "/ui") || path == "/" {
-				// 去掉 /ui 前缀，让 fileServer 在 staticRoot 中查找文件
-				stripPath := strings.TrimPrefix(path, "/ui")
-				if stripPath == "" || stripPath == "/" {
-					stripPath = "/index.html"
-				}
-				c.Request.URL.Path = stripPath
-				fileServer.ServeHTTP(c.Writer, c.Request)
-				return
+		// /ui 和 /ui/ 直接返回 index.html
+		engine.GET("/ui", func(c *gin.Context) {
+			c.Request.URL.Path = "/index.html"
+			fileServer.ServeHTTP(c.Writer, c.Request)
+		})
+		engine.GET("/ui/", func(c *gin.Context) {
+			c.Request.URL.Path = "/index.html"
+			fileServer.ServeHTTP(c.Writer, c.Request)
+		})
+
+		// /ui/* 静态资源
+		engine.GET("/ui/*filepath", func(c *gin.Context) {
+			fp := c.Param("filepath")
+			if fp == "" || fp == "/" {
+				fp = "/index.html"
 			}
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			c.Request.URL.Path = fp
+			fileServer.ServeHTTP(c.Writer, c.Request)
 		})
 	} else {
 		// 兼容：没有根 engine 时也挂到 api 所在 group 的顶层（多了 /api 前缀）
@@ -232,18 +237,25 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 		}
 		fileServer := http.FileServer(http.FS(staticRoot))
 
-		// 通配符路由处理 /api/ui/* 静态文件和 SPA 路由
-		api.GET("/ui/*filepath", func(c *gin.Context) {
-			filepath := c.Param("filepath")
-			if filepath == "" || filepath == "/" {
-				filepath = "/index.html"
-			}
-			c.Request.URL.Path = filepath
+		api.GET("/", func(c *gin.Context) {
+			c.Request.URL.Path = "/index.html"
 			fileServer.ServeHTTP(c.Writer, c.Request)
 		})
-		// 首页重定向
-		api.GET("/", func(c *gin.Context) {
-			c.Redirect(http.StatusMovedPermanently, "/api/ui/")
+		api.GET("/ui", func(c *gin.Context) {
+			c.Request.URL.Path = "/index.html"
+			fileServer.ServeHTTP(c.Writer, c.Request)
+		})
+		api.GET("/ui/", func(c *gin.Context) {
+			c.Request.URL.Path = "/index.html"
+			fileServer.ServeHTTP(c.Writer, c.Request)
+		})
+		api.GET("/ui/*filepath", func(c *gin.Context) {
+			fp := c.Param("filepath")
+			if fp == "" || fp == "/" {
+				fp = "/index.html"
+			}
+			c.Request.URL.Path = fp
+			fileServer.ServeHTTP(c.Writer, c.Request)
 		})
 	}
 }
