@@ -18,7 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-//go:embed static/*
+//go:embed all:static
 var StaticFS embed.FS
 
 const clientPublicKey = "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEzmz6+EK8UC40g5XsqoAjqURAKP6uCAMmXJeEyzR/8BkZ1vVXpFTMF/AmBl3Tf+gvDFPJkT9Bm3bAO0IeXo+ssMOsJX4NFPLM4+YEohwJrJyRaMptmh1nvWue4J5+vbZW"
@@ -183,15 +183,44 @@ func RegisterRoutes(api *gin.RouterGroup, engine *gin.Engine) {
 
 	// 静态控制台 & 根跳转 挂在根路径，不重复加 /api 前缀
 	if engine != nil {
-		staticRoot, _ := fs.Sub(StaticFS, "static")
+		staticRoot, err := fs.Sub(StaticFS, "static")
+		if err != nil {
+			panic(fmt.Sprintf("failed to create static sub fs: %v", err))
+		}
+		
+		// 调试端点：检查嵌入的文件
+		engine.GET("/debug/static", func(c *gin.Context) {
+			entries, err := fs.ReadDir(staticRoot, ".")
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			files := []string{}
+			for _, e := range entries {
+				files = append(files, e.Name())
+			}
+			c.JSON(200, gin.H{"files": files})
+		})
+		
 		engine.StaticFS("/ui", http.FS(staticRoot))
 		engine.GET("/", func(c *gin.Context) {
 			c.Redirect(http.StatusMovedPermanently, "/ui/")
 		})
+		// 处理 /ui/ 路径，返回 index.html
+		engine.GET("/ui/", func(c *gin.Context) {
+			c.FileFromFS("index.html", http.FS(staticRoot))
+		})
 	} else {
 		// 兼容：没有根 engine 时也挂到 api 所在 group 的顶层（多了 /api 前缀）
-		staticRoot, _ := fs.Sub(StaticFS, "static")
+		staticRoot, err := fs.Sub(StaticFS, "static")
+		if err != nil {
+			panic(fmt.Sprintf("failed to create static sub fs: %v", err))
+		}
 		api.StaticFS("/ui", http.FS(staticRoot))
+		// 处理 /api/ui/ 路径，返回 index.html
+		api.GET("/ui/", func(c *gin.Context) {
+			c.FileFromFS("index.html", http.FS(staticRoot))
+		})
 	}
 }
 
