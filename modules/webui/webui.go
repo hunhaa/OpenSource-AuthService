@@ -88,6 +88,7 @@ type EnterReq struct {
 type AuthV2Req struct {
 	Token    string `json:"token"`
 	ServerID string `json:"server_id"`
+	Password string `json:"password"` // 租赁服密码（可选）
 }
 
 // ---------- helpers ----------
@@ -484,6 +485,46 @@ func HandleRentalAuthV2(c *gin.Context) {
 		return
 	}
 
+	// 关键修复：先调用 EnterRentalServerWorld 进入租赁服世界
+	enterResp, err := s.Client.EnterRentalServerWorld(req.ServerID, req.Password)
+	if err != nil {
+		fail(c, 500, "EnterRentalServerWorld 失败: %v", err)
+		return
+	}
+	if enterResp.Code != 0 {
+		fail(c, 500, "EnterRentalServerWorld 返回错误: code=%d msg=%s", enterResp.Code, enterResp.Message)
+		return
+	}
+	actualServerID := enterResp.Entity.ServerID
+	if actualServerID == "" {
+		actualServerID = req.ServerID
+	}
+
+	// 关键修复：通过 Link 连接发送租赁服专用的 GameStart，绑定 Link 会话到租赁服
+	// 参考 auth/login.go 的正确流程，需要发送 game_type=10 和 gameType="RentalGame"
+	gameInfo := map[string]interface{}{
+		"gameType":  "RentalGame",
+		"room_name": actualServerID,
+		"id":        actualServerID,
+	}
+	gameInfoJSON, err := json.Marshal(gameInfo)
+	if err != nil {
+		fail(c, 500, "marshal rental game info 失败: %v", err)
+		return
+	}
+	gameStartPayload := map[string]interface{}{
+		"game_info":    string(gameInfoJSON),
+		"strict_mode":  true,
+		"game_type":    10,
+		"is_free_play": false,
+		"game_id":      actualServerID,
+		"play_iids":    []string{},
+	}
+	if err := s.LinkConn.SendGameStart(gameStartPayload); err != nil {
+		fail(c, 500, "Link SendGameStart(租赁服) 失败: %v", err)
+		return
+	}
+
 	// 两种字段组合依次尝试：先 PC 版（os=windows patchVersion空），失败再试 PE 版（os=android）
 	// 两种变体同时尝试可以覆盖不同服务器类型对字段的要求
 	type variant struct {
@@ -494,13 +535,13 @@ func HandleRentalAuthV2(c *gin.Context) {
 		{
 			name: "PC版(os=windows,patch=\"\",platform=pc,pcCheck=0)",
 			gen: func() ([]byte, error) {
-				return s.Client.GeneratePCRentalGameAuthV2(req.ServerID, clientPublicKey)
+				return s.Client.GeneratePCRentalGameAuthV2(actualServerID, clientPublicKey)
 			},
 		},
 		{
 			name: "PE版(os=android,patch=latest,platform=android)",
 			gen: func() ([]byte, error) {
-				return s.Client.GenerateRentalGameAuthV2(req.ServerID, clientPublicKey)
+				return s.Client.GenerateRentalGameAuthV2(actualServerID, clientPublicKey)
 			},
 		},
 	}
@@ -519,11 +560,12 @@ func HandleRentalAuthV2(c *gin.Context) {
 		chainInfo, aerr := s.Client.SendAuthV2Request(data)
 		if aerr == nil {
 			ok(c, gin.H{
-				"server_id":       req.ServerID,
+				"server_id":       actualServerID,
 				"used_variant":    v.name,
 				"chain_info_b64":  encodeB64(chainInfo),
 				"chain_info_hex":  hex.EncodeToString(chainInfo),
 				"chain_info_len":  len(chainInfo),
+				"enter_response":  enterResp.Entity,
 			})
 			return
 		}

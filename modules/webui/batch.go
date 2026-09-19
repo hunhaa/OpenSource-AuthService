@@ -352,7 +352,54 @@ func HandleBatchAuthV2(c *gin.Context) {
 			continue
 		}
 
-		// 依次尝试 PC 版和 PE 版
+		// 关键修复：先调用 EnterRentalServerWorld 进入租赁服世界
+		enterResp, err := s.Client.EnterRentalServerWorld(serverIDUsed, "")
+		if err != nil {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("EnterRentalServerWorld 失败: %v", err)
+			results[i] = r
+			continue
+		}
+		if enterResp.Code != 0 {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("EnterRentalServerWorld 错误: code=%d msg=%s", enterResp.Code, enterResp.Message)
+			results[i] = r
+			continue
+		}
+		actualServerID := enterResp.Entity.ServerID
+		if actualServerID == "" {
+			actualServerID = serverIDUsed
+		}
+
+		// 关键修复：通过 Link 连接发送租赁服专用的 GameStart，绑定 Link 会话到租赁服
+		gameInfo := map[string]interface{}{
+			"gameType":  "RentalGame",
+			"room_name": actualServerID,
+			"id":        actualServerID,
+		}
+		gameInfoJSON, err := json.Marshal(gameInfo)
+		if err != nil {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("marshal rental game info 失败: %v", err)
+			results[i] = r
+			continue
+		}
+		gameStartPayload := map[string]interface{}{
+			"game_info":    string(gameInfoJSON),
+			"strict_mode":  true,
+			"game_type":    10,
+			"is_free_play": false,
+			"game_id":      actualServerID,
+			"play_iids":    []string{},
+		}
+		if err := s.LinkConn.SendGameStart(gameStartPayload); err != nil {
+			r.Status = "error"
+			r.Error = fmt.Sprintf("Link SendGameStart(租赁服) 失败: %v", err)
+			results[i] = r
+			continue
+		}
+
+		// 依次尝试 PC 版和 PE 版（使用 actualServerID）
 		type variant struct {
 			name string
 			gen  func() ([]byte, error)
@@ -361,13 +408,13 @@ func HandleBatchAuthV2(c *gin.Context) {
 			{
 				name: "PC版",
 				gen: func() ([]byte, error) {
-					return s.Client.GeneratePCRentalGameAuthV2(serverIDUsed, clientPublicKey)
+					return s.Client.GeneratePCRentalGameAuthV2(actualServerID, clientPublicKey)
 				},
 			},
 			{
 				name: "PE版",
 				gen: func() ([]byte, error) {
-					return s.Client.GenerateRentalGameAuthV2(serverIDUsed, clientPublicKey)
+					return s.Client.GenerateRentalGameAuthV2(actualServerID, clientPublicKey)
 				},
 			},
 		}
